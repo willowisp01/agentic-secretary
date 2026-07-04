@@ -4,7 +4,7 @@ Full detail (acceptance criteria, verification, files, dependencies) in
 [`tasks/plan.md`](plan.md). This file tracks status only.
 
 ## Phase 1: Foundation
-- [ ] Task 1: Project scaffolding and config
+- [x] Task 1: Project scaffolding and config
 - [ ] Task 2: Google OAuth flow
 - [ ] Task 3: Seed data fixtures (conflict patterns)
 

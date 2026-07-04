@@ -55,7 +55,7 @@ Config/deps (Task 1)
 
 ### Phase 1: Foundation
 
-- [ ] Task 1: Project scaffolding and config
+- [x] Task 1: Project scaffolding and config
 - [ ] Task 2: Google OAuth flow
 - [ ] Task 3: Seed data fixtures (conflict patterns)
 
@@ -109,18 +109,18 @@ implement `config.py` to load `.env` (API keys, Google client secret path)
 and expose the default model constant.
 
 **Acceptance criteria:**
-- [ ] `pyproject.toml` lists `langchain`, `langchain-anthropic`, `langgraph`,
+- [x] `pyproject.toml` lists `langchain`, `langchain-anthropic`, `langgraph`,
       `google-api-python-client`, `google-auth-oauthlib`,
       `google-auth-httplib2`, `langsmith`, `python-dotenv`, `pyyaml` plus
       `pytest`/`ruff` as dev dependencies
-- [ ] `config.py` loads `.env` and exposes `ANTHROPIC_API_KEY`,
+- [x] `config.py` loads `.env` and exposes `ANTHROPIC_API_KEY`,
       `LANGSMITH_API_KEY`, `GOOGLE_CLIENT_SECRET_PATH`, `GOOGLE_TOKEN_PATH`,
       and `MODEL_NAME` (default `claude-haiku-4-5`)
 
 **Verification:**
-- [ ] `uv sync` succeeds
-- [ ] `uv run python -c "from agentic_secretary.config import settings; print(settings.model_name)"` prints `claude-haiku-4-5`
-- [ ] `uv run ruff check src/` passes
+- [x] `uv sync` succeeds
+- [x] `uv run python -c "from agentic_secretary.config import settings; print(settings.model_name)"` prints `claude-haiku-4-5`
+- [x] `uv run ruff check src/` passes
 
 **Dependencies:** None
 
