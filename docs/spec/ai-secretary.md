@@ -1,4 +1,4 @@
-# Spec: AI Secretary (Portfolio Project) — Phase 1: Planner
+# Spec: AI Secretary (Portfolio Project) — Milestone 1: Planner
 
 See [`docs/intent/ai-secretary.md`](../intent/ai-secretary.md) for the confirmed
 project intent this spec implements.
@@ -76,7 +76,7 @@ agentic-secretary/
 ```
 
 Node/tool files stay single-file (not split into subpackages) while the node
-count is small (~5). Revisit this once RAG (phase 2) adds enough new
+count is small (~5). Revisit this once RAG (milestone 2) adds enough new
 tools/nodes to justify splitting.
 
 ## Code Style
@@ -126,7 +126,7 @@ def check_calendar(state: PlannerState) -> PlannerState:
 - **Ask first:** adding new dependencies beyond the tech stack above;
   changing the default model tier (e.g., away from Haiku) in a way that
   changes cost profile; expanding scope into RAG/vector DB or multi-persona
-  support (explicitly phase 2+, per intent doc).
+  support (explicitly milestone 2+, per intent doc).
 - **Never do:** commit real credentials, `.env`, `token.json`, or
   `credentials.json`; auto-send emails or auto-book events without a human
   approval step; deploy this publicly/hosted (local-only per intent doc).
@@ -146,10 +146,10 @@ def check_calendar(state: PlannerState) -> PlannerState:
 - [ ] `uv run pytest` passes, covering tool-parsing and conflict-detection
       logic against fixture data (no live API calls in the test suite).
 
-## Seed Data — Conflict Patterns (Phase 1 scope: time conflicts only)
+## Seed Data — Conflict Patterns (Milestone 1 scope: time conflicts only)
 
 Per the intent doc, seed data is synthetic and versioned in `seed_data/`.
-Phase 1 includes a small, curated set (4-6 scenarios) covering:
+Milestone 1 includes a small, curated set (4-6 scenarios) covering:
 
 1. Direct calendar-to-calendar overlap (two seeded events collide).
 2. Email meeting request that collides with an existing seeded event (the
@@ -159,10 +159,10 @@ Phase 1 includes a small, curated set (4-6 scenarios) covering:
 4. A reschedule/cancellation email against an existing seeded event.
 
 Resource conflicts (e.g., shared rooms) and priority conflicts (e.g.,
-client vs. internal meeting importance) are out of scope for phase 1.
+client vs. internal meeting importance) are out of scope for milestone 1.
 
 ## Open Questions
 
 None outstanding. Resolved: lint/format tool is Ruff; LangGraph checkpointer
-is in-memory for phase 1 (resets each CLI run — revisit if a later demo
+is in-memory for milestone 1 (resets each CLI run — revisit if a later demo
 wants to show resuming a paused/interrupted session).

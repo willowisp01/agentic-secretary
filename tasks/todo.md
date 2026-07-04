@@ -1,4 +1,4 @@
-# Task List: AI Secretary — Phase 1 (Planner)
+# Task List: AI Secretary — Milestone 1 (Planner)
 
 Full detail (acceptance criteria, verification, files, dependencies) in
 [`tasks/plan.md`](plan.md). This file tracks status only.
@@ -35,7 +35,7 @@ response, pauses for human confirmation; conflict-pattern tests pass.
 LangSmith trace confirmed, README walkthrough verified — ready for demo
 recording.
 
-## Prerequisites (not automatable — needed before Phase 1 starts)
+## Prerequisites (not automatable — needed before implementation starts)
 - [ ] Google Cloud project + OAuth client created, Gmail + Calendar APIs
       enabled
 - [ ] Burner Gmail/Calendar account ready and accessible

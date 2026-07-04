@@ -1,4 +1,4 @@
-# Implementation Plan: AI Secretary — Phase 1 (Planner)
+# Implementation Plan: AI Secretary — Milestone 1 (Planner)
 
 Implements [`docs/spec/ai-secretary.md`](../docs/spec/ai-secretary.md).
 
@@ -37,8 +37,8 @@ Config/deps (Task 1)
 ## Architecture Decisions
 
 - **`src/agentic_secretary/` single-file modules** (`tools.py`, `graph.py`)
-  rather than subpackages — node/tool count is small enough for phase 1;
-  revisit if phase 2 (RAG) adds enough surface area to justify splitting.
+  rather than subpackages — node/tool count is small enough for milestone 1;
+  revisit if milestone 2 (RAG) adds enough surface area to justify splitting.
 - **In-memory LangGraph checkpointer** — state doesn't need to survive a
   process restart yet; simplest option for a CLI-driven demo.
 - **Tools are thin wrappers, no reasoning** — `draft_reply`/`propose_event`
@@ -291,7 +291,7 @@ extracting a requested meeting time from free-text email content).
 **Description:** Add a `draft_response` node that calls `draft_reply`/
 `propose_event` to prepare (not execute) actions, then a `human_review` node
 that interrupts the graph and displays the draft(s) in the CLI for approval.
-Phase 1 stops at the draft — no send/create ever happens, confirmed or not.
+Milestone 1 stops at the draft — no send/create ever happens, confirmed or not.
 
 **Acceptance criteria:**
 - [ ] Running the CLI against a seeded conflict scenario pauses at
@@ -390,4 +390,4 @@ the synthetic-data disclosure note from the intent doc.
 None outstanding for this plan. Note: Tasks 2, 5, 8 (manual check), and 9
 depend on you completing Google Cloud OAuth client setup and having burner
 account access ready — these are prerequisites outside what can be automated
-and should be confirmed before starting Phase 1 implementation.
+and should be confirmed before implementation begins.

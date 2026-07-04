@@ -26,7 +26,7 @@ Confirmed via interview on 2026-07-04.
   cost), burner Gmail/Calendar account, local-only runtime (no hosted/public
   deployment so no one but the author can operate it), LangSmith for tracing.
 - **Out of scope (for now):** Multi-persona support, RAG/vector database
-  (phase 2), autonomous auto-send/auto-book without human review, and
+  (milestone 2), autonomous auto-send/auto-book without human review, and
   public/hosted deployment.
 
 ## Repo conventions agreed alongside this
