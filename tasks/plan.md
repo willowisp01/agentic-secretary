@@ -56,7 +56,7 @@ Config/deps (Task 1)
 ### Phase 1: Foundation
 
 - [x] Task 1: Project scaffolding and config
-- [ ] Task 2: Google OAuth flow
+- [x] Task 2: Google OAuth flow
 - [ ] Task 3: Seed data fixtures (conflict patterns)
 
 ### Checkpoint: Foundation
@@ -137,15 +137,15 @@ and expose the default model constant.
 Calendar scopes, caching and refreshing the token locally.
 
 **Acceptance criteria:**
-- [ ] `auth.py` exposes a function returning valid `Credentials`, running
+- [x] `auth.py` exposes a function returning valid `Credentials`, running
       the browser consent flow on first use and refreshing silently after
-- [ ] Token cache path and client secret path come from `config.py`, never
+- [x] Token cache path and client secret path come from `config.py`, never
       hardcoded
 
 **Verification:**
-- [ ] `tests/test_auth.py` mocks the OAuth flow to verify caching/refresh
+- [x] `tests/test_auth.py` mocks the OAuth flow to verify caching/refresh
       logic without live network calls
-- [ ] Manual smoke test (documented in README): first run opens a consent
+- [x] Manual smoke test (documented in README): first run opens a consent
       screen against the burner account; second run reuses the cached token
       with no browser prompt
 

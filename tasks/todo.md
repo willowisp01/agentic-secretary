@@ -5,7 +5,7 @@ Full detail (acceptance criteria, verification, files, dependencies) in
 
 ## Phase 1: Foundation
 - [x] Task 1: Project scaffolding and config
-- [ ] Task 2: Google OAuth flow
+- [x] Task 2: Google OAuth flow
 - [ ] Task 3: Seed data fixtures (conflict patterns)
 
 **Checkpoint:** deps installed + lint clean, OAuth smoke test works against
@@ -36,7 +36,7 @@ LangSmith trace confirmed, README walkthrough verified — ready for demo
 recording.
 
 ## Prerequisites (not automatable — needed before implementation starts)
-- [ ] Google Cloud project + OAuth client created, Gmail + Calendar APIs
+- [x] Google Cloud project + OAuth client created, Gmail + Calendar APIs
       enabled
-- [ ] Burner Gmail/Calendar account ready and accessible
+- [x] Burner Gmail/Calendar account ready and accessible
 - [ ] `ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY` available for `.env`
