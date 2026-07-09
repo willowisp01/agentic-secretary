@@ -1,0 +1,18 @@
+relations:
+  - kind: calendar_overlap
+    events: [evt_standup, evt_client_call]
+
+  - kind: back_to_back
+    events: [evt_lunch, evt_review]
+
+  - kind: email_conflict
+    email: email_meeting_request
+    events: [evt_standup]
+
+  - kind: reschedule
+    email: email_reschedule
+    event: evt_client_call
+
+  - kind: mentions
+    email: email_casual_mention
+    event: evt_client_call

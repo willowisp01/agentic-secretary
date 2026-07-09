@@ -6,7 +6,7 @@ Full detail (acceptance criteria, verification, files, dependencies) in
 ## Phase 1: Foundation
 - [x] Task 1: Project scaffolding and config
 - [x] Task 2: Google OAuth flow
-- [ ] Task 3: Seed data fixtures (conflict patterns)
+- [x] Task 3: Seed data fixtures (conflict patterns)
 
 **Checkpoint:** deps installed + lint clean, OAuth smoke test works against
 burner account, seed fixtures parse and cover all 4 conflict patterns.

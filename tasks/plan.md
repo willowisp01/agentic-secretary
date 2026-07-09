@@ -57,7 +57,7 @@ Config/deps (Task 1)
 
 - [x] Task 1: Project scaffolding and config
 - [x] Task 2: Google OAuth flow
-- [ ] Task 3: Seed data fixtures (conflict patterns)
+- [x] Task 3: Seed data fixtures (conflict patterns)
 
 ### Checkpoint: Foundation
 - [ ] `uv sync` succeeds, `uv run ruff check .` clean
@@ -160,24 +160,50 @@ Calendar scopes, caching and refreshing the token locally.
 
 ### Task 3: Seed data fixtures (conflict patterns)
 
-**Description:** Author `seed_data/emails.yaml` and
-`seed_data/calendar_events.yaml` covering the 4 conflict patterns from the
-spec: calendar-calendar overlap, email-request-vs-calendar conflict,
-back-to-back no-buffer, and a reschedule/cancellation email — 4-6 scenarios
-total.
+**Description:** Author `seed_data/emails.yaml`, `seed_data/calendar_events.yaml`,
+and `seed_data/relations.yaml` covering the 4 conflict patterns from the
+spec (calendar-calendar overlap, email-request-vs-calendar conflict,
+back-to-back no-buffer, reschedule/cancellation email) plus a `mentions`
+relation — an email that references an existing event without proposing a
+conflict or reschedule, to test the "no false positives" side of Task 7.
+`relations.yaml` keeps cross-references out of `emails.yaml`/
+`calendar_events.yaml` so those stay pure records; each relation's `kind`
+determines its required id shape (see below). 4-6 email/event scenarios
+total, plus their relations.
+
+Relation kinds and required shape:
+| kind | fields | arity |
+|---|---|---|
+| `calendar_overlap` | `events: [...]` | ≥ 2 |
+| `back_to_back` | `events: [...]` | exactly 2 |
+| `email_conflict` | `email`, `events: [...]` | ≥ 1 event |
+| `reschedule` | `email`, `event` | exactly 1 event |
+| `mentions` | `email`, `event` | exactly 1 event |
+
+An email/event with no entry in `relations.yaml` is the "relates to
+nothing" distractor case (e.g. an internal digest email).
 
 **Acceptance criteria:**
-- [ ] Each of the 4 conflict patterns is represented at least once
-- [ ] Time fields use the relative-time convention (`sent_relative`,
+- [x] Each of the 4 conflict patterns, plus `mentions`, is represented at
+      least once in `relations.yaml`
+- [x] Time fields use the relative-time convention (`sent_relative`,
       `start_relative`) so re-seeding always looks current
+- [x] A loader/validator (`src/agentic_secretary/seed_data.py`) parses all
+      three files into typed objects and raises if a relation's `kind`
+      doesn't match its required arity, or if it references an unknown
+      email/event id
 
 **Verification:**
-- [ ] `uv run python -c "import yaml; yaml.safe_load(open('seed_data/emails.yaml'))"`
-      and the same for `calendar_events.yaml` succeed without error
+- [x] `tests/test_seed_data.py` asserts all three fixtures parse, all 5
+      relation kinds are represented, `validate_relations` accepts the real
+      fixtures without error, and rejects a malformed arity/unknown
+      reference in a synthetic bad-fixture case
 
 **Dependencies:** None (can run in parallel with Tasks 1-2)
 
-**Files likely touched:** `seed_data/emails.yaml`, `seed_data/calendar_events.yaml`
+**Files likely touched:** `seed_data/emails.yaml`, `seed_data/calendar_events.yaml`,
+`seed_data/relations.yaml`, `src/agentic_secretary/seed_data.py`,
+`tests/test_seed_data.py`
 
 **Estimated scope:** Small
 

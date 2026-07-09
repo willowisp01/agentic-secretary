@@ -1,0 +1,20 @@
+events:
+  - id: evt_standup
+    title: "Team Standup"
+    start_relative: "+1d 09:00"
+    duration_minutes: 30
+
+  - id: evt_client_call
+    title: "Client Sync"
+    start_relative: "+1d 09:15"
+    duration_minutes: 45
+
+  - id: evt_lunch
+    title: "Lunch"
+    start_relative: "+1d 12:00"
+    duration_minutes: 60
+
+  - id: evt_review
+    title: "Design Review"
+    start_relative: "+1d 13:00"
+    duration_minutes: 45

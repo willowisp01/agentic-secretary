@@ -1,0 +1,37 @@
+emails:
+  - id: email_meeting_request
+    from: "alex.chen@example.com"
+    to: "you@example.com"
+    subject: "Quick sync tomorrow?"
+    body: |
+      Hey — are you free tomorrow at 9:15am for about 30 minutes to
+      sync on the Q3 roadmap? Let me know if that works.
+    sent_relative: "-2h"
+
+  - id: email_reschedule
+    from: "priya.patel@example.com"
+    to: "you@example.com"
+    subject: "Re: Client Sync — need to move"
+    body: |
+      Something came up on my end — can we push our client sync
+      from tomorrow to Thursday instead? Same time works if that's
+      easier.
+    sent_relative: "-30m"
+
+  - id: email_casual_mention
+    from: "jordan.lee@example.com"
+    to: "you@example.com"
+    subject: "See you at the client call!"
+    body: |
+      Looking forward to catching up at our client sync tomorrow —
+      it's been a while since we last talked.
+    sent_relative: "-3h"
+
+  - id: email_internal_digest
+    from: "digest@example.com"
+    to: "you@example.com"
+    subject: "Your weekly team digest"
+    body: |
+      Here's what happened on the team this week: 3 PRs merged,
+      1 incident resolved, next sprint planning is Monday.
+    sent_relative: "-1d"
