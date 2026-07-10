@@ -14,6 +14,11 @@ RELATION_ARITY = {
 
 @dataclass(frozen=True)
 class Email:
+    """Fixture-stage email: not yet seeded, so `sent_relative` is still a
+    relative-time string and there's no Gmail-assigned thread_id. Compare
+    `tools.EmailSummary`, the live-fetched shape after seeding.
+    """
+
     id: str
     from_: str
     to: str
@@ -24,6 +29,12 @@ class Email:
 
 @dataclass(frozen=True)
 class CalendarEvent:
+    """Fixture-stage event: not yet seeded, so `start_relative` is still a
+    relative-time string and there's no Calendar-assigned id. Same class
+    name as `tools.CalendarEvent` (the live, absolute-time shape after
+    seeding) — import with an alias if both are needed in one file.
+    """
+
     id: str
     title: str
     start_relative: str

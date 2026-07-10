@@ -8,6 +8,12 @@ from googleapiclient.discovery import Resource
 
 @dataclass(frozen=True)
 class EmailSummary:
+    """An email as actually read back from Gmail: `received_at` is an
+    absolute datetime decoded from the API's internalDate, and `thread_id`
+    is Gmail-assigned. Compare `seed_data.Email`, the pre-seeding fixture
+    shape with a still-relative send time.
+    """
+
     id: str
     thread_id: str
     from_: str
@@ -19,6 +25,12 @@ class EmailSummary:
 
 @dataclass(frozen=True)
 class CalendarEvent:
+    """An event as actually read back from Calendar: `start`/`end` are
+    absolute datetimes. Same class name as `seed_data.CalendarEvent` (the
+    pre-seeding fixture shape with a relative `start_relative` string) —
+    import with an alias if both are needed in one file.
+    """
+
     id: str
     title: str
     start: datetime
