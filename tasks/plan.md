@@ -77,7 +77,7 @@ Config/deps (Task 1)
 
 ### Phase 3: Agent Reasoning
 
-- [ ] Task 6: PlannerState + graph skeleton
+- [x] Task 6: PlannerState + graph skeleton
 - [ ] Task 7: Conflict-detection node
 - [ ] Task 8: Draft-response node + human-review interrupt
 
@@ -275,10 +275,11 @@ reasoning nodes.
 **Acceptance criteria:**
 - [ ] `uv run python -m agentic_secretary.cli` (bare-bones CLI) runs the
       graph and prints fetched emails + calendar events from the seeded
-      burner account
+      burner account (pending: needs a live run against the burner
+      account/credentials, not available in this environment)
 
 **Verification:**
-- [ ] `tests/test_graph.py` runs the compiled graph against fixture state
+- [x] `tests/test_graph.py` runs the compiled graph against fixture state
       (not live APIs), asserting state shape after each node
 
 **Dependencies:** Task 4
