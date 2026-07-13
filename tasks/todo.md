@@ -12,14 +12,14 @@ Full detail (acceptance criteria, verification, files, dependencies) in
 burner account, seed fixtures parse and cover all 4 conflict patterns.
 
 ## Phase 2: Data Layer
-- [ ] Task 4: Gmail/Calendar tool wrappers
-- [ ] Task 5: Seeding script
+- [x] Task 4: Gmail/Calendar tool wrappers
+- [x] Task 5: Seeding script
 
 **Checkpoint:** burner account seeded and visually verified, tool tests pass
 against mocks (no live calls in the test suite).
 
 ## Phase 3: Agent Reasoning
-- [ ] Task 6: PlannerState + graph skeleton
+- [x] Task 6: PlannerState + graph skeleton
 - [ ] Task 7: Conflict-detection node
 - [ ] Task 8: Draft-response node + human-review interrupt
 

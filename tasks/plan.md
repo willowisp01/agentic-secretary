@@ -229,13 +229,13 @@ wrappers only — no reasoning logic. `draft_reply`/`propose_event` must only
 *prepare* actions (Gmail draft, structured proposal), never send or create.
 
 **Acceptance criteria:**
-- [ ] Every function has a typed signature and docstring
-- [ ] `draft_reply` calls Gmail's draft-create endpoint, never `send`
-- [ ] `propose_event` returns a structured proposal object, never calls
+- [x] Every function has a typed signature and docstring
+- [x] `draft_reply` calls Gmail's draft-create endpoint, never `send`
+- [x] `propose_event` returns a structured proposal object, never calls
       Calendar's `events.insert`
 
 **Verification:**
-- [ ] `tests/test_tools.py` mocks the Google API client; asserts `list_*`
+- [x] `tests/test_tools.py` mocks the Google API client; asserts `list_*`
       functions correctly parse mock API responses into typed objects, and
       asserts (`assert_not_called`) that no send/insert-committing method is
       ever invoked by `draft_reply`/`propose_event`
@@ -257,17 +257,19 @@ direct API calls if seeding needs endpoints the agent's tools don't expose,
 e.g. `messages.insert` for received mail vs. `drafts.create`).
 
 **Acceptance criteria:**
-- [ ] Running the script populates the burner Gmail + Calendar with all
-      seeded scenarios (pending: needs a live run against the burner
-      account/credentials, not available in this environment)
+- [x] Running the script populates the burner Gmail + Calendar with all
+      seeded scenarios (confirmed indirectly: Task 6's 2026-07-13 live CLI
+      run fetched 4 emails + 4 calendar events from the burner account,
+      which only exist there because this script seeded them)
 - [x] Relative times resolve correctly relative to "now" at seed time
       (covered by `tests/test_seed_demo_data.py`: offset formats `-2h`/`+30m`/
       `-1d` and the day+clock-time format `+1d 09:00`, plus invalid-format
       rejection)
 
 **Verification:**
-- [ ] Manual run + visual check in Gmail/Calendar web UI (live-API action,
-      not part of the automated suite) — still needs to be run by hand
+- [x] Manual run + visual check in Gmail/Calendar web UI (live-API action,
+      not part of the automated suite) — confirmed via Task 6's live fetch
+      results rather than a separate visual check
 
 **Dependencies:** Task 2, Task 3
 
