@@ -13,19 +13,25 @@ SCOPES = [
 ]
 
 
-def get_credentials() -> Credentials:
-    """Return valid Google API credentials, prompting for consent on first use.
+def load_credentials(
+    scopes: list[str], token_path: str, client_secret_path: str
+) -> Credentials:
+    """Return valid Google API credentials for `scopes`, prompting for consent
+    on first use.
 
-    Reads/writes the cached token at `settings.google_token_path`. Runs the
-    installed-app (Authorization Code + PKCE) consent flow via a local
-    loopback server only when no valid cached token exists.
+    Reads/writes the cached token at `token_path`. Runs the installed-app
+    (Authorization Code + PKCE) consent flow via a local loopback server only
+    when no valid cached token exists. Generic over scopes/token path so
+    callers that need a different grant (e.g. seeding) don't have to share
+    the runtime token cache — see `get_credentials` below and
+    `scripts/seed_demo_data.py`.
     """
-    token_path = Path(settings.google_token_path)
+    path = Path(token_path)
     creds: Credentials | None = None
 
-    if token_path.exists():
+    if path.exists():
         # Case 3: cached token is still valid — reuse it, no server contact at all.
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        creds = Credentials.from_authorized_user_file(str(path), scopes)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -33,10 +39,18 @@ def get_credentials() -> Credentials:
             creds.refresh(Request())
         else:
             # Case 1: no usable cached token — run the full Authorization Code + PKCE consent flow.
-            flow = InstalledAppFlow.from_client_secrets_file(
-                settings.google_client_secret_path, SCOPES
-            )
+            flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, scopes)
             creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json())
+        path.write_text(creds.to_json())
 
     return creds
+
+
+def get_credentials() -> Credentials:
+    """Return valid Google API credentials for the agent's runtime scopes.
+
+    Reads/writes the cached token at `settings.google_token_path`.
+    """
+    return load_credentials(
+        SCOPES, settings.google_token_path, settings.google_client_secret_path
+    )

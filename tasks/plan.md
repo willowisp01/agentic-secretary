@@ -67,8 +67,8 @@ Config/deps (Task 1)
 
 ### Phase 2: Data Layer
 
-- [ ] Task 4: Gmail/Calendar tool wrappers
-- [ ] Task 5: Seeding script
+- [x] Task 4: Gmail/Calendar tool wrappers
+- [x] Task 5: Seeding script
 
 ### Checkpoint: Data Layer
 - [ ] Burner account seeded successfully with all scenarios (manual visual check)
@@ -246,12 +246,16 @@ e.g. `messages.insert` for received mail vs. `drafts.create`).
 
 **Acceptance criteria:**
 - [ ] Running the script populates the burner Gmail + Calendar with all
-      seeded scenarios
-- [ ] Relative times resolve correctly relative to "now" at seed time
+      seeded scenarios (pending: needs a live run against the burner
+      account/credentials, not available in this environment)
+- [x] Relative times resolve correctly relative to "now" at seed time
+      (covered by `tests/test_seed_demo_data.py`: offset formats `-2h`/`+30m`/
+      `-1d` and the day+clock-time format `+1d 09:00`, plus invalid-format
+      rejection)
 
 **Verification:**
 - [ ] Manual run + visual check in Gmail/Calendar web UI (live-API action,
-      not part of the automated suite)
+      not part of the automated suite) — still needs to be run by hand
 
 **Dependencies:** Task 2, Task 3
 

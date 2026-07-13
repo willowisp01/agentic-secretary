@@ -12,3 +12,5 @@ wheels/
 .env
 credentials.json
 token.json
+seed_token.json
+cleanup_token.json

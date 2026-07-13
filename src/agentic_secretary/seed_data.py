@@ -50,7 +50,7 @@ class Relation:
 
 
 def load_emails(path: Path) -> list[Email]:
-    data = yaml.safe_load(path.read_text())
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return [
         Email(
             id=e["id"],
@@ -65,7 +65,7 @@ def load_emails(path: Path) -> list[Email]:
 
 
 def load_calendar_events(path: Path) -> list[CalendarEvent]:
-    data = yaml.safe_load(path.read_text())
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return [
         CalendarEvent(
             id=e["id"],
@@ -78,7 +78,7 @@ def load_calendar_events(path: Path) -> list[CalendarEvent]:
 
 
 def load_relations(path: Path) -> list[Relation]:
-    data = yaml.safe_load(path.read_text())
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return [
         Relation(
             kind=r["kind"],

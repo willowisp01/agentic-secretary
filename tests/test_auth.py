@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from agentic_secretary.auth import get_credentials
+from agentic_secretary.auth import get_credentials, load_credentials
 
 
 def _fake_creds(valid=True, expired=False, refresh_token="refresh-token"):
@@ -73,3 +73,28 @@ def test_refreshes_expired_token_without_new_consent(tmp_path):
     mock_flow_cls.from_client_secrets_file.assert_not_called()
     assert creds is expired_creds
     assert token_path.read_text() == '{"token": "fake"}'
+
+
+def test_load_credentials_uses_given_scopes_and_token_path_not_runtime_settings():
+    token_path_str = "some/other/seed_token.json"
+    seed_scopes = ["https://www.googleapis.com/auth/gmail.insert"]
+    new_creds = _fake_creds()
+
+    with (
+        patch("agentic_secretary.auth.Path") as mock_path_cls,
+        patch("agentic_secretary.auth.InstalledAppFlow") as mock_flow_cls,
+    ):
+        mock_path = MagicMock()
+        mock_path.exists.return_value = False
+        mock_path_cls.return_value = mock_path
+        mock_flow = MagicMock()
+        mock_flow.run_local_server.return_value = new_creds
+        mock_flow_cls.from_client_secrets_file.return_value = mock_flow
+
+        creds = load_credentials(seed_scopes, token_path_str, "credentials.json")
+
+    mock_path_cls.assert_called_once_with(token_path_str)
+    mock_flow_cls.from_client_secrets_file.assert_called_once_with(
+        "credentials.json", seed_scopes
+    )
+    assert creds is new_creds
