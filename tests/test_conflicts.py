@@ -104,6 +104,22 @@ def test_email_intent_clears_proposed_time_when_no_new_meeting():
     assert intent.proposed_duration_minutes is None
 
 
+def test_email_intent_normalizes_naive_proposed_start_to_utc():
+    # Reproduces a live-discovered gap: nothing in the schema/prompt forces
+    # the LLM to include a UTC offset, and a naive datetime compared against
+    # a timezone-aware CalendarEvent time raises TypeError. The prompt gives
+    # the LLM UTC-anchored times, so a naive response is normalized as UTC
+    # rather than left to crash downstream comparisons.
+    intent = _EmailIntent(
+        proposes_new_meeting=True,
+        requests_reschedule=False,
+        proposed_start="2026-07-14T09:00:00",
+        proposed_duration_minutes=30,
+    )
+
+    assert intent.proposed_start == datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc)
+
+
 # _analyze_email is mocked below rather than calling a real LLM: these tests
 # assert on detect_conflicts' handling of the LLM's output (overlap math,
 # reschedule lookup), not on the LLM's own judgment, and no live API calls
@@ -134,6 +150,30 @@ def _intent_for(email_id: str) -> _EmailIntent:
 @patch("agentic_secretary.graph._analyze_email")
 def test_detect_conflicts_finds_email_meeting_request_conflict(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
+    state = {
+        "emails": [MEETING_REQUEST_EMAIL],
+        "calendar_events": [STANDUP],
+        "conflicts": [],
+        "status": "done",
+    }
+
+    result = detect_conflicts(state)
+
+    kinds = {c["kind"] for c in result["conflicts"]}
+    assert "email_conflict" in kinds
+
+
+@patch("agentic_secretary.graph._analyze_email")
+def test_detect_conflicts_finds_email_conflict_with_zero_duration_proposal(mock_analyze):
+    # Reproduces a bug: a truthiness check (`and intent.proposed_duration_minutes`)
+    # treated a legitimate 0-minute proposal the same as "unset", silently
+    # skipping conflict detection for it.
+    mock_analyze.return_value = _EmailIntent(
+        proposes_new_meeting=True,
+        requests_reschedule=False,
+        proposed_start=STANDUP.start + timedelta(minutes=15),
+        proposed_duration_minutes=0,
+    )
     state = {
         "emails": [MEETING_REQUEST_EMAIL],
         "calendar_events": [STANDUP],

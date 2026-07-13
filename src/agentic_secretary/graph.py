@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
 from googleapiclient.discovery import Resource
@@ -88,7 +88,7 @@ class _EmailIntent(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _clear_irrelevant_fields(self) -> "_EmailIntent":
+    def _normalize(self) -> "_EmailIntent":
         # The LLM boundary isn't trustworthy about leaving unrelated fields
         # null (observed live: a digest email that mentions no event at all
         # still got a real, valid event id attached to references_event_id).
@@ -98,6 +98,15 @@ class _EmailIntent(BaseModel):
             self.proposed_duration_minutes = None
         if not self.requests_reschedule:
             self.references_event_id = None
+
+        # Nothing forces the LLM to include a UTC offset, and a naive
+        # datetime compared against a timezone-aware CalendarEvent time
+        # raises TypeError. The prompt gives the LLM UTC-anchored times, so
+        # treat a naive response as UTC rather than leaving it to crash the
+        # comparison in _find_email_conflicts.
+        if self.proposed_start is not None and self.proposed_start.tzinfo is None:
+            self.proposed_start = self.proposed_start.replace(tzinfo=timezone.utc)
+
         return self
 
 
@@ -140,8 +149,8 @@ def _find_email_conflicts(
 
         if (
             intent.proposes_new_meeting
-            and intent.proposed_start
-            and intent.proposed_duration_minutes
+            and intent.proposed_start is not None
+            and intent.proposed_duration_minutes is not None
         ):
             proposed_start = intent.proposed_start
             proposed_end = proposed_start + timedelta(minutes=intent.proposed_duration_minutes)
