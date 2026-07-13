@@ -371,6 +371,24 @@ of which menu option is chosen.
 
 **Estimated scope:** Medium
 
+**Consideration — relative-date arithmetic for "shift the slot":** live testing
+during Task 7 showed `_analyze_email`'s LLM call miscomputing a relative-day
+reference (an email asking to move a meeting to "Thursday" got resolved to
+the wrong date, off by one day), even though the event and reschedule intent
+were identified correctly. Task 7's `reschedule` pattern doesn't need the
+target date (it only needs to know a reschedule was requested and which
+event), so this hasn't affected Task 7. It will matter here once "shift the
+slot" needs an actual new time to pass to `propose_event(...)`. Two mitigations
+to consider when implementing: (1) give the LLM the anchor date's weekday
+name explicitly in the prompt rather than making it infer/compute one, and
+(2) prefer having the LLM extract a symbolic target (e.g. a weekday name or
+"same time as original") and resolve it to an absolute datetime with
+deterministic Python code, consistent with this plan's "deterministic +
+LLM-assisted" architecture decision, rather than trusting the LLM's own date
+arithmetic. Either way, the human-review interrupt in this task's own design
+is the backstop — a wrong proposed time still requires human confirmation
+before anything is booked.
+
 ---
 
 ### Task 9: LangSmith tracing verification
