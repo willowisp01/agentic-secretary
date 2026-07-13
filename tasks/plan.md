@@ -285,10 +285,10 @@ prove the graph compiles and runs against the live tool layer before adding
 reasoning nodes.
 
 **Acceptance criteria:**
-- [ ] `uv run python -m agentic_secretary.cli` (bare-bones CLI) runs the
+- [x] `uv run python -m agentic_secretary.cli` (bare-bones CLI) runs the
       graph and prints fetched emails + calendar events from the seeded
-      burner account (pending: needs a live run against the burner
-      account/credentials, not available in this environment)
+      burner account (verified live 2026-07-13: 4 emails + 4 calendar
+      events fetched successfully)
 
 **Verification:**
 - [x] `tests/test_graph.py` runs the compiled graph against fixture state
