@@ -89,7 +89,7 @@ Config/deps (Task 1)
 ### Phase 3: Agent Reasoning
 
 - [x] Task 6: PlannerState + graph skeleton
-- [ ] Task 7: Conflict-detection node
+- [x] Task 7: Conflict-detection node
 - [ ] Task 8: Draft-response node + human-review interrupt
 
 ### Checkpoint: Core Agent Flow
@@ -317,14 +317,16 @@ it's triggered (from a chat turn) and what happens with its output (a menu,
 not an auto-draft).
 
 **Acceptance criteria:**
-- [ ] Given the seeded fixture data, `detect_conflicts` identifies at least
+- [x] Given the seeded fixture data, `detect_conflicts` identifies at least
       one real conflict of each of the 4 pattern types
-- [ ] A conflict-free fixture produces no false-positive conflicts
+- [x] A conflict-free fixture produces no false-positive conflicts
 
 **Verification:**
-- [ ] `tests/test_conflicts.py` exercises `detect_conflicts` against fixture
+- [x] `tests/test_conflicts.py` exercises `detect_conflicts` against fixture
       state for each pattern and asserts conflicts are found, plus a
-      negative case for the conflict-free fixture
+      negative case for the conflict-free fixture (verified live 2026-07-14
+      against the real Anthropic API, repeated runs: no crashes, all 4
+      patterns classified correctly, no false positives)
 
 **Dependencies:** Task 6
 
@@ -332,6 +334,22 @@ not an auto-draft).
 `tests/test_conflicts.py`
 
 **Estimated scope:** Medium
+
+**Implementation note:** `calendar_overlap`/`back_to_back` are deterministic
+(direct time-range comparison); `email_conflict`/`reschedule` use an
+LLM-assisted `_analyze_email` call per email. That call uses a Pydantic
+`BaseModel` schema (`_EmailIntent`) with `with_structured_output(...,
+method="json_schema")` rather than a `TypedDict` with the default
+`function_calling` method — live testing showed `function_calling` doesn't
+guarantee every schema field is populated (Claude can omit a key entirely,
+causing a `KeyError` downstream), while `json_schema` uses Claude's
+constrained-decoding structured-outputs feature to guarantee schema
+conformance. A `model_validator` additionally zeroes fields whose paired
+boolean is false, since live probing showed the model can still attach a
+real, valid event id to an email that references no event at all. `pydantic`
+was added as an explicit dependency (previously only transitive via
+`langchain`/`langgraph`). Future LLM-calling nodes (e.g. Task 8's draft
+generation) should follow this same pattern.
 
 ---
 

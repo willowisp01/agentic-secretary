@@ -41,6 +41,9 @@ full reasoning trace is visible in LangSmith.
 - `python-dotenv` — load `.env`
 - `pytest` — testing
 - `pyyaml` — seed data fixtures
+- `pydantic` — schemas for LLM structured-output extraction (validated, not
+  just type-hinted); used with `with_structured_output(..., method=
+  "json_schema")` for Claude's constrained-decoding structured outputs
 
 ## Commands
 
@@ -128,8 +131,12 @@ conflict-detection and chat-menu nodes that use them exist (Task 7/8).
 - `tests/test_tools.py`: mock the Google API clients (no live network calls
   in unit tests) — verify tool functions parse/shape data correctly.
 - `tests/test_graph.py`: run the compiled LangGraph app against fixture
-  state (not live APIs) and assert on conflict-detection logic and
-  draft-output shape.
+  state (not live APIs) and assert on graph wiring/state shape.
+- `tests/test_conflicts.py`: exercise `detect_conflicts` (deterministic
+  overlap/back-to-back math, plus the LLM-assisted email patterns with
+  `_analyze_email` mocked — no live Anthropic calls in the automated suite,
+  same "no live API calls" rule as the Google clients) against fixture data
+  loaded from the real `seed_data/*.yaml`, not hand-duplicated lookalikes.
 - No coverage percentage target for a portfolio project of this size;
   prioritize covering the conflict-detection logic and tool-parsing edges
   over exhaustive coverage.

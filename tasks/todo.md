@@ -20,7 +20,7 @@ against mocks (no live calls in the test suite).
 
 ## Phase 3: Agent Reasoning
 - [x] Task 6: PlannerState + graph skeleton
-- [ ] Task 7: Conflict-detection node
+- [x] Task 7: Conflict-detection node
 - [ ] Task 8: Draft-response node + human-review interrupt
 
 **Checkpoint:** end-to-end CLI run detects seeded conflicts, drafts a
