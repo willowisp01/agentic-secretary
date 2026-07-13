@@ -6,9 +6,11 @@ Implements [`docs/spec/ai-secretary.md`](../docs/spec/ai-secretary.md).
 
 Build a LangGraph-orchestrated planner agent that reads a burner Gmail inbox
 and Google Calendar, detects scheduling time-conflicts against seeded
-synthetic data, and drafts (never auto-sends/auto-books) a response for
-human review — with Claude Haiku 4.5 as the default model and LangSmith
-tracing the reasoning path.
+synthetic data, and — via a chat loop rather than a fixed no-input
+pipeline — presents each conflict with a human-chosen remedy menu (shift
+slot / draft email / skip) instead of unilaterally authoring a draft. Every
+remedy stays propose-only (never auto-sends/auto-books). Claude Haiku 4.5 is
+the default model; LangSmith traces the reasoning path.
 
 ## Dependency Graph
 
@@ -50,6 +52,15 @@ Config/deps (Task 1)
   comparisons are checked deterministically where possible, with the LLM
   used for the interpretive parts (e.g., reading intent out of an email).
   Reduces the risk of the LLM missing an unambiguous overlap.
+- **Chat loop, not a fixed pipeline** (decided before Task 6+, see
+  `docs/spec/ai-secretary.md`'s Conflict Response Behavior section) — the
+  agent greets the user and waits for free text (e.g. "check for
+  conflicts") rather than running `fetch_emails → check_calendar →
+  detect_conflicts` unconditionally. After `detect_conflicts`, each
+  conflict gets a human-chosen remedy via menu (shift slot / draft email /
+  skip) instead of a bot-authored draft to approve/reject. Both menu
+  actions stay propose-only — no write-capable tool is added for milestone
+  1.
 
 ## Task List
 
@@ -82,8 +93,9 @@ Config/deps (Task 1)
 - [ ] Task 8: Draft-response node + human-review interrupt
 
 ### Checkpoint: Core Agent Flow
-- [ ] End-to-end CLI run against the seeded account: fetch → detect seeded
-      conflicts → draft response → pause for human confirmation
+- [ ] End-to-end CLI run against the seeded account: greet → free-text
+      "check for conflicts" → fetch → detect seeded conflicts → pause at
+      remedy menu per conflict
 - [ ] All conflict-pattern tests pass against fixtures
 - [ ] Review with human before observability/polish phase
 
@@ -296,7 +308,11 @@ reasoning nodes.
 **Description:** Add a `detect_conflicts` node implementing the 4 conflict
 patterns from the spec, using deterministic time-comparison logic where
 possible and an LLM call (Haiku) for the interpretive parts (e.g.,
-extracting a requested meeting time from free-text email content).
+extracting a requested meeting time from free-text email content). The node
+itself is unchanged by the chat-loop decision — it still takes
+`emails`/`calendar_events` and returns `conflicts`; only Task 8 changes how
+it's triggered (from a chat turn) and what happens with its output (a menu,
+not an auto-draft).
 
 **Acceptance criteria:**
 - [ ] Given the seeded fixture data, `detect_conflicts` identifies at least
@@ -317,23 +333,34 @@ extracting a requested meeting time from free-text email content).
 
 ---
 
-### Task 8: Draft-response node + human-review interrupt
+### Task 8: Chat loop + conflict remedy menu
 
-**Description:** Add a `draft_response` node that calls `draft_reply`/
-`propose_event` to prepare (not execute) actions, then a `human_review` node
-that interrupts the graph and displays the draft(s) in the CLI for approval.
-Milestone 1 stops at the draft — no send/create ever happens, confirmed or not.
+**Description:** Add the chat entry point: a `greet` node that opens with a
+greeting, then a turn that accepts free-text human input (e.g. "check for
+conflicts") and routes to `detect_conflicts` (Task 7). For each conflict
+found, an interrupt presents a menu — shift slot / draft email / skip — per
+`docs/spec/ai-secretary.md`'s Conflict Response Behavior. The chosen remedy
+calls `propose_event` (shift) or `draft_reply` (draft email), or makes no
+tool call (skip), and the outcome is appended to `state["resolutions"]`.
+Milestone 1 stops at the proposal — no send/create ever happens, regardless
+of which menu option is chosen.
 
 **Acceptance criteria:**
-- [ ] Running the CLI against a seeded conflict scenario pauses at
-      `human_review` and displays the proposed draft/event clearly
-- [ ] No tool call that would send an email or create an event exists
-      anywhere in this phase's code path
+- [ ] Running the CLI opens a chat prompt; a check-for-conflicts message
+      runs detection and pauses at a remedy-menu interrupt for each
+      detected conflict
+- [ ] Choosing "shift slot" or "draft email" produces the corresponding
+      proposal object and appends a resolution to `state["resolutions"]`;
+      choosing "skip" appends a resolution with no tool call
+- [ ] No tool call that would send an email or create/patch a calendar
+      event exists anywhere in this phase's code path
 
 **Verification:**
-- [ ] Manual CLI run demonstrating the pause-and-display flow
-- [ ] `tests/test_graph.py` asserts the graph halts at the interrupt node
-      without a confirmation input
+- [ ] Manual CLI run demonstrating greeting → free-text input → conflict →
+      menu → proposal, for at least one conflict pattern
+- [ ] `tests/test_graph.py` asserts the graph halts at the menu interrupt
+      without a chosen remedy, and asserts each menu branch's resulting
+      state shape
 
 **Dependencies:** Task 7
 
@@ -418,7 +445,11 @@ the synthetic-data disclosure note from the intent doc.
 
 ## Open Questions
 
-None outstanding for this plan. Note: Tasks 2, 5, 8 (manual check), and 9
+None outstanding for this plan. Resolved 2026-07-13: milestone 1 moved from
+a fixed no-input pipeline to a chat loop, with conflict response as a
+human-chosen remedy menu rather than a bot-authored draft (see Architecture
+Decisions above and `docs/spec/ai-secretary.md`'s Conflict Response
+Behavior section). Note: Tasks 2, 5, 8 (manual check), and 9
 depend on you completing Google Cloud OAuth client setup and having burner
 account access ready — these are prerequisites outside what can be automated
 and should be confirmed before implementation begins.

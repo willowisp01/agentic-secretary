@@ -17,11 +17,16 @@ explicitly out of scope for this phase (see intent doc).
 synthetic emails and calendar events (see Seed Data below).
 
 **Success looks like:** running the CLI against the seeded burner account
-produces a session where the agent (a) summarizes the day's schedule and
-inbox, (b) identifies at least one real time conflict between a
-calendar event and an incoming meeting-request email, and (c) drafts a
-reply/event proposal for the user to approve — with the full reasoning trace
-visible in LangSmith.
+opens a chat session — the agent greets the user, the user replies with
+free text (e.g. "check for conflicts"), and the agent (a) fetches the day's
+schedule and inbox, (b) identifies at least one real time conflict between
+a calendar event and an incoming meeting-request email, and (c) presents
+each conflict with a menu of remedies (shift the slot / draft a reply
+email / skip) for the human to choose — rather than unilaterally
+authoring one draft to approve or reject. Chosen remedies stay
+propose-only (a Gmail draft or a structured event proposal); actually
+sending the email or booking the slot is deferred to a later milestone. The
+full reasoning trace is visible in LangSmith.
 
 ## Tech Stack
 
@@ -56,20 +61,23 @@ agentic-secretary/
 │                               #   LANGSMITH_API_KEY, GOOGLE_CLIENT_SECRET_PATH
 ├── seed_data/
 │   ├── emails.yaml            # synthetic scenario content
-│   └── calendar_events.yaml
+│   ├── calendar_events.yaml
+│   └── relations.yaml         # cross-references (conflict/reschedule/mentions)
+│                               #   between seeded emails and events
 ├── scripts/
-│   └── seed_demo_data.py      # pushes seed_data/ into the burner account
+│   ├── seed_demo_data.py      # pushes seed_data/ into the burner account
+│   ├── nuke_seed_data.py      # clears seeded messages/events from the burner account
+│   └── _google_account_safety.py  # confirms target account before a write script runs
 ├── src/agentic_secretary/
 │   ├── __init__.py
 │   ├── cli.py                 # entry point
 │   ├── config.py              # env loading, model selection, constants
 │   ├── auth.py                # Google OAuth flow (Gmail + Calendar)
-│   ├── tools.py                # LangChain tools: list_emails, get_calendar_events,
-│   │                           #   draft_reply, propose_event
-│   └── graph.py                # LangGraph graph: nodes + edges + compiled app
-├── tests/
-│   ├── test_tools.py
-│   └── test_graph.py
+│   ├── seed_data.py           # typed loader/validator for seed_data/*.yaml
+│   ├── tools.py                # thin tool wrappers: list_recent_emails,
+│   │                           #   list_upcoming_events, draft_reply, propose_event
+│   └── graph.py                # LangGraph graph: PlannerState + nodes + edges
+├── tests/                     # one test module per src/scripts module above
 └── docs/
     ├── intent/ai-secretary.md
     └── spec/ai-secretary.md
@@ -87,15 +95,27 @@ tools/nodes to justify splitting.
 
 ```python
 class PlannerState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]  # chat turns: greeting,
+                                                           # human input, menu replies
     emails: list[EmailSummary]
     calendar_events: list[CalendarEvent]
     conflicts: list[Conflict]
-    draft_actions: list[DraftAction]
+    pending_conflict_index: int          # which conflict is awaiting a menu choice
+    resolutions: Annotated[list[ConflictResolution], operator.add]  # chosen
+                                                           # remedy per conflict
 
-def check_calendar(state: PlannerState) -> PlannerState:
-    events = calendar_tool.list_upcoming_events()
-    return {**state, "calendar_events": events}
+def check_calendar(state: PlannerState) -> dict:
+    events = tools.list_upcoming_events(calendar_service)
+    return {"calendar_events": events}
 ```
+
+Nodes return a partial dict of only the keys they update — not a full-state
+spread — so each field's reducer (default: replace; `add_messages`/
+`operator.add`: append) decides how it merges. `PlannerState` grows
+incrementally with the graph: the Task 6 skeleton (`fetch_emails →
+check_calendar`) only needs `emails`/`calendar_events`/`status`; `messages`,
+`conflicts`, `pending_conflict_index`, and `resolutions` are added once the
+conflict-detection and chat-menu nodes that use them exist (Task 7/8).
 
 - Tools are thin wrappers around the Google API clients — no business logic
   in the tool layer; reasoning belongs in graph nodes / prompts.
@@ -131,16 +151,40 @@ def check_calendar(state: PlannerState) -> PlannerState:
   `credentials.json`; auto-send emails or auto-book events without a human
   approval step; deploy this publicly/hosted (local-only per intent doc).
 
+## Conflict Response Behavior
+
+Milestone 1 does not prescribe per-pattern draft content (i.e. no fixed
+template like "for a calendar-calendar overlap, always draft X"). Instead,
+once `detect_conflicts` finds a conflict, the agent presents it in a chat
+turn and offers the human a menu:
+
+1. **Shift the slot** — calls `propose_event(...)`, producing a structured
+   `EventProposal`. Never calls Calendar's `insert`/`patch`.
+2. **Draft a reply email** — calls `draft_reply(...)`, producing a Gmail
+   draft via `drafts.create`. Never calls `send`.
+3. **Skip** — no tool call; the conflict is left unresolved for this run.
+
+The human's choice determines the action; the agent does not unilaterally
+author and present a single draft for approve/reject. Both menu actions
+(1 and 2) are propose-only, matching the tool-layer boundary already
+enforced in `tools.py` — no write-capable tool (`patch`/`update`/`send`) is
+in scope for milestone 1. Actually applying a slot shift or sending a
+drafted email is deferred to a later milestone, gated behind its own
+human-in-the-loop confirmation.
+
 ## Success Criteria
 
 - [ ] `uv run python scripts/seed_demo_data.py` populates the burner Gmail +
       Calendar with the seeded synthetic scenarios (including at least one
       deliberate time conflict, per the conflict-seeding patterns below).
-- [ ] `uv run python -m agentic_secretary.cli` runs end-to-end against the
-      seeded account: fetches emails, fetches calendar, detects the seeded
-      conflict, and produces a drafted reply/event proposal.
-- [ ] No action (send/create) happens without an explicit human confirmation
-      step in the CLI flow.
+- [ ] `uv run python -m agentic_secretary.cli` opens a chat session against
+      the seeded account: the agent greets the user, the user asks it to
+      check for conflicts, the agent fetches emails/calendar, detects the
+      seeded conflict, and presents a remedy menu (shift slot / draft email
+      / skip) per the Conflict Response Behavior above.
+- [ ] No action (send/create) happens without an explicit human menu choice
+      in the chat flow, and even a chosen remedy only ever produces a
+      proposal (draft or structured event), never a send/insert/patch call.
 - [ ] A LangSmith trace exists for the run and shows the node-by-node
       reasoning path.
 - [ ] `uv run pytest` passes, covering tool-parsing and conflict-detection
@@ -165,4 +209,7 @@ client vs. internal meeting importance) are out of scope for milestone 1.
 
 None outstanding. Resolved: lint/format tool is Ruff; LangGraph checkpointer
 is in-memory for milestone 1 (resets each CLI run — revisit if a later demo
-wants to show resuming a paused/interrupted session).
+wants to show resuming a paused/interrupted session); milestone 1 entry
+point is a chat loop rather than a fixed no-input pipeline, and conflict
+response is a human-chosen remedy via menu rather than a bot-authored draft
+per conflict pattern (see Conflict Response Behavior above).
