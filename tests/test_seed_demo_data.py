@@ -1,10 +1,12 @@
 import base64
 from datetime import datetime, timedelta, timezone
+from email import message_from_bytes
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from agentic_secretary.seed_data import CalendarEvent, Email
+from agentic_secretary.seed_data import load_calendar_events, load_emails
 from seed_demo_data import (
     _build_email_insert_body,
     _build_event_insert_body,
@@ -13,6 +15,9 @@ from seed_demo_data import (
 )
 
 NOW = datetime(2026, 7, 10, 15, 0, tzinfo=timezone.utc)
+SEED_DATA_DIR = Path(__file__).resolve().parent.parent / "seed_data"
+_FIXTURE_EMAILS = {e.id: e for e in load_emails(SEED_DATA_DIR / "emails.yaml")}
+_FIXTURE_EVENTS = {e.id: e for e in load_calendar_events(SEED_DATA_DIR / "calendar_events.yaml")}
 
 
 def test_resolve_relative_time_offset_hours():
@@ -38,41 +43,32 @@ def test_resolve_relative_time_rejects_unrecognized_format():
 
 
 def test_build_email_insert_body_encodes_message_with_labels():
-    email = Email(
-        id="email_x",
-        from_="alex@example.com",
-        to="you@example.com",
-        subject="Quick sync tomorrow?",
-        body="Are you free tomorrow?",
-        sent_relative="-2h",
-    )
+    # email_meeting_request's body has a non-ASCII em-dash, which makes
+    # MIMEText pick base64 for its own inner Content-Transfer-Encoding --
+    # parse the MIME message rather than substring-searching the outer
+    # decoded bytes, which would still contain that inner encoding as-is.
+    email = _FIXTURE_EMAILS["email_meeting_request"]
 
     body = _build_email_insert_body(email, NOW)
 
     assert body["labelIds"] == ["INBOX", "UNREAD"]
     raw = body["raw"]
-    decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8")
-    assert "Are you free tomorrow?" in decoded
-    assert "Quick sync tomorrow?" in decoded
+    decoded_bytes = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+    message = message_from_bytes(decoded_bytes)
+    assert message["Subject"] == email.subject
+    assert message.get_payload(decode=True).decode("utf-8") == email.body
 
 
 def test_build_event_insert_body_computes_end_from_duration():
-    event = CalendarEvent(
-        id="evt_standup",
-        title="Team Standup",
-        start_relative="+1d 09:00",
-        duration_minutes=30,
-    )
+    event = _FIXTURE_EVENTS["evt_standup"]
 
     body = _build_event_insert_body(event, NOW)
 
-    assert body["summary"] == "Team Standup"
-    assert body["start"]["dateTime"] == datetime(
-        2026, 7, 11, 9, 0, tzinfo=timezone.utc
-    ).isoformat()
-    assert body["end"]["dateTime"] == datetime(
-        2026, 7, 11, 9, 30, tzinfo=timezone.utc
-    ).isoformat()
+    expected_start = resolve_relative_time(event.start_relative, NOW)
+    expected_end = expected_start + timedelta(minutes=event.duration_minutes)
+    assert body["summary"] == event.title
+    assert body["start"]["dateTime"] == expected_start.isoformat()
+    assert body["end"]["dateTime"] == expected_end.isoformat()
 
 
 def test_seed_inserts_all_fixture_emails_and_events_via_direct_api_calls():
