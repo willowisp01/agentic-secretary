@@ -33,7 +33,12 @@ def _build_test_graph():
 
 
 def test_planner_state_has_expected_fields():
-    assert set(PlannerState.__annotations__) == {"emails", "calendar_events", "status"}
+    assert set(PlannerState.__annotations__) == {
+        "emails",
+        "calendar_events",
+        "conflicts",
+        "status",
+    }
 
 
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
