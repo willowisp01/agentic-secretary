@@ -79,7 +79,11 @@ def _extract_plain_text_body(payload: dict) -> str:
 def _parse_event_time(time_field: dict[str, str]) -> datetime:
     if "dateTime" in time_field:
         return datetime.fromisoformat(time_field["dateTime"])
-    return datetime.fromisoformat(time_field["date"])
+    # All-day events have no inherent timezone from the API; normalize to
+    # UTC so this is always comparable against timed events' timezone-aware
+    # datetimes elsewhere (e.g. detect_conflicts' overlap checks), which
+    # would otherwise raise TypeError comparing naive vs. aware datetimes.
+    return datetime.fromisoformat(time_field["date"]).replace(tzinfo=timezone.utc)
 
 
 def list_recent_emails(service: Resource, max_results: int = 10) -> list[EmailSummary]:

@@ -127,8 +127,12 @@ def test_list_upcoming_events_parses_timed_and_all_day_events():
         CalendarEvent(
             id="e2",
             title="Company Offsite",
-            start=datetime.fromisoformat("2026-07-11"),
-            end=datetime.fromisoformat("2026-07-12"),
+            # All-day events have no inherent timezone from the API; normalized
+            # to UTC here so this is always comparable against timed events'
+            # timezone-aware datetimes elsewhere (e.g. detect_conflicts'
+            # overlap checks), which would otherwise raise TypeError.
+            start=datetime(2026, 7, 11, tzinfo=timezone.utc),
+            end=datetime(2026, 7, 12, tzinfo=timezone.utc),
         ),
     ]
 
