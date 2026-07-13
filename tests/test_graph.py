@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from agentic_secretary.graph import PlannerState, build_graph
+from agentic_secretary.graph import PlannerState, _EmailIntent, build_graph
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 
 FAKE_EMAILS = [
@@ -25,13 +25,7 @@ FAKE_EVENTS = [
 ]
 # detect_conflicts now runs on every invoke; stub its LLM call so these
 # fetch/check tests stay about fetch/check, not conflict detection.
-NO_INTENT = {
-    "proposes_new_meeting": False,
-    "proposed_start": None,
-    "proposed_duration_minutes": None,
-    "references_event_id": None,
-    "requests_reschedule": False,
-}
+NO_INTENT = _EmailIntent(proposes_new_meeting=False, requests_reschedule=False)
 
 
 def _build_test_graph():

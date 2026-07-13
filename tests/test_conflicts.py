@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentic_secretary import seed_data
-from agentic_secretary.graph import detect_conflicts
+from agentic_secretary.graph import _EmailIntent, detect_conflicts
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 from seed_demo_data import resolve_relative_time
 
@@ -77,32 +77,58 @@ def test_detect_conflicts_no_false_positive_for_well_spaced_events():
     assert result["conflicts"] == []
 
 
+def test_email_intent_clears_reference_id_when_not_rescheduling():
+    # Reproduces a live finding: the LLM can attach a real, valid event id to
+    # an email that never mentions any event at all (observed for a digest
+    # email), because a "required, always-present" field pressures it to
+    # fill in something. Normalize that at the schema boundary rather than
+    # trusting every future caller to re-derive the same gating logic.
+    intent = _EmailIntent(
+        proposes_new_meeting=False,
+        requests_reschedule=False,
+        references_event_id="evt_standup",
+    )
+
+    assert intent.references_event_id is None
+
+
+def test_email_intent_clears_proposed_time_when_no_new_meeting():
+    intent = _EmailIntent(
+        proposes_new_meeting=False,
+        requests_reschedule=False,
+        proposed_start="2026-07-14T09:00:00+00:00",
+        proposed_duration_minutes=30,
+    )
+
+    assert intent.proposed_start is None
+    assert intent.proposed_duration_minutes is None
+
+
 # _analyze_email is mocked below rather than calling a real LLM: these tests
 # assert on detect_conflicts' handling of the LLM's output (overlap math,
 # reschedule lookup), not on the LLM's own judgment, and no live API calls
 # belong in the automated suite (see docs/spec/ai-secretary.md Testing Strategy).
-NO_INTENT = {
-    "proposes_new_meeting": False,
-    "proposed_start": None,
-    "proposed_duration_minutes": None,
-    "references_event_id": None,
-    "requests_reschedule": False,
-}
+def _no_intent() -> _EmailIntent:
+    return _EmailIntent(proposes_new_meeting=False, requests_reschedule=False)
 
 
-def _intent_for(email_id: str) -> dict:
+def _intent_for(email_id: str) -> _EmailIntent:
     if email_id == "email_meeting_request":
-        return {
-            **NO_INTENT,
-            "proposes_new_meeting": True,
-            "proposed_start": resolve_relative_time(
+        return _EmailIntent(
+            proposes_new_meeting=True,
+            requests_reschedule=False,
+            proposed_start=resolve_relative_time(
                 _FIXTURE_EVENTS["evt_standup"].start_relative, NOW
-            ).isoformat(),
-            "proposed_duration_minutes": 30,
-        }
+            ),
+            proposed_duration_minutes=30,
+        )
     if email_id == "email_reschedule":
-        return {**NO_INTENT, "references_event_id": "evt_client_call", "requests_reschedule": True}
-    return NO_INTENT
+        return _EmailIntent(
+            proposes_new_meeting=False,
+            requests_reschedule=True,
+            references_event_id="evt_client_call",
+        )
+    return _no_intent()
 
 
 @patch("agentic_secretary.graph._analyze_email")

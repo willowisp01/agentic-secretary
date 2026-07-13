@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
-from typing import Annotated, TypedDict
+from typing import TypedDict
 
 from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, Field, model_validator
 
 from agentic_secretary import tools
 from agentic_secretary.config import settings
@@ -62,30 +63,42 @@ def _find_back_to_back(events: list[tools.CalendarEvent]) -> list[Conflict]:
     return conflicts
 
 
-class _EmailIntent(TypedDict):
-    proposes_new_meeting: Annotated[
-        bool,
-        "True only if the email proposes a specific new meeting time that is "
-        "not about an existing calendar event listed below.",
-    ]
-    proposed_start: Annotated[
-        str | None,
-        "ISO 8601 datetime of the proposed meeting's start, resolved against "
+class _EmailIntent(BaseModel):
+    proposes_new_meeting: bool = Field(
+        description="True only if the email proposes a specific new meeting time "
+        "that is not about an existing calendar event listed below."
+    )
+    proposed_start: datetime | None = Field(
+        default=None,
+        description="Datetime of the proposed meeting's start, resolved against "
         "the email's received time. Null unless proposes_new_meeting is true.",
-    ]
-    proposed_duration_minutes: Annotated[
-        int | None,
-        "Duration of the proposed meeting in minutes. Null unless "
+    )
+    proposed_duration_minutes: int | None = Field(
+        default=None,
+        description="Duration of the proposed meeting in minutes. Null unless "
         "proposes_new_meeting is true.",
-    ]
-    references_event_id: Annotated[
-        str | None, "The id of an existing calendar event this email discusses, if any."
-    ]
-    requests_reschedule: Annotated[
-        bool,
-        "True only if the email explicitly asks to move or cancel "
-        "references_event_id, as opposed to merely mentioning it in passing.",
-    ]
+    )
+    references_event_id: str | None = Field(
+        default=None,
+        description="The id of an existing calendar event this email discusses, if any.",
+    )
+    requests_reschedule: bool = Field(
+        description="True only if the email explicitly asks to move or cancel "
+        "references_event_id, as opposed to merely mentioning it in passing."
+    )
+
+    @model_validator(mode="after")
+    def _clear_irrelevant_fields(self) -> "_EmailIntent":
+        # The LLM boundary isn't trustworthy about leaving unrelated fields
+        # null (observed live: a digest email that mentions no event at all
+        # still got a real, valid event id attached to references_event_id).
+        # Normalize here so every caller doesn't have to re-derive this gating.
+        if not self.proposes_new_meeting:
+            self.proposed_start = None
+            self.proposed_duration_minutes = None
+        if not self.requests_reschedule:
+            self.references_event_id = None
+        return self
 
 
 def _analyze_email(
@@ -97,7 +110,7 @@ def _analyze_email(
     versus merely mention it?
     """
     llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
-    structured_llm = llm.with_structured_output(_EmailIntent)
+    structured_llm = llm.with_structured_output(_EmailIntent, method="json_schema")
     events_context = (
         "\n".join(
             f"- id={e.id!r} title={e.title!r} start={e.start.isoformat()} end={e.end.isoformat()}"
@@ -113,7 +126,7 @@ def _analyze_email(
         f"Body:\n{email.body}\n\n"
         f"Existing calendar events:\n{events_context}"
     )
-    return structured_llm.invoke(prompt)  # type: ignore[return-value]
+    return structured_llm.invoke(prompt)
 
 
 def _find_email_conflicts(
@@ -126,12 +139,12 @@ def _find_email_conflicts(
         intent = _analyze_email(email, calendar_events)
 
         if (
-            intent["proposes_new_meeting"]
-            and intent["proposed_start"]
-            and intent["proposed_duration_minutes"]
+            intent.proposes_new_meeting
+            and intent.proposed_start
+            and intent.proposed_duration_minutes
         ):
-            proposed_start = datetime.fromisoformat(intent["proposed_start"])
-            proposed_end = proposed_start + timedelta(minutes=intent["proposed_duration_minutes"])
+            proposed_start = intent.proposed_start
+            proposed_end = proposed_start + timedelta(minutes=intent.proposed_duration_minutes)
             for event in calendar_events:
                 if proposed_start < event.end and event.start < proposed_end:
                     conflicts.append(
@@ -145,8 +158,8 @@ def _find_email_conflicts(
                         )
                     )
 
-        if intent["requests_reschedule"] and intent["references_event_id"] in events_by_id:
-            event = events_by_id[intent["references_event_id"]]
+        if intent.requests_reschedule and intent.references_event_id in events_by_id:
+            event = events_by_id[intent.references_event_id]
             conflicts.append(
                 Conflict(
                     kind="reschedule",

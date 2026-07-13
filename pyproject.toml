@@ -14,6 +14,7 @@ dependencies = [
     "langsmith",
     "python-dotenv",
     "pyyaml",
+    "pydantic",
 ]
 
 [dependency-groups]
