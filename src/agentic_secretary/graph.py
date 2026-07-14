@@ -1,3 +1,4 @@
+import operator
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 
@@ -82,6 +83,15 @@ ActionNeeded = Annotated[
 ChatIntentValue = Literal["check_actions", "others"]
 
 
+class ActionResolution(BaseModel):
+    action_item: ActionNeeded
+    remedy: Literal["shift_slot", "draft_reply", "skip"]
+    # None for "skip" (no tool call) and, transiently, before the
+    # content-generation step has produced a proposal for a remedy that
+    # needs one.
+    proposal: tools.EventProposal | tools.DraftResult | None = None
+
+
 class PlannerState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     emails: list[tools.EmailSummary]
@@ -90,6 +100,11 @@ class PlannerState(TypedDict):
     # Routing signal for classify_intent's conditional edge, not
     # conversation content -- overwritten each time classify_intent runs.
     intent: ChatIntentValue
+    # Appended to (never replaced) as present_menu works through
+    # action_items one at a time.
+    resolutions: Annotated[list[ActionResolution], operator.add]
+    # Which action_items entry is currently awaiting a menu choice.
+    pending_action_index: int
     status: str
 
 

@@ -4,7 +4,15 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from agentic_secretary.graph import PlannerState, _ChatIntent, _EmailIntent, build_graph, greet
+from agentic_secretary.graph import (
+    ActionResolution,
+    CalendarOverlapConflict,
+    PlannerState,
+    _ChatIntent,
+    _EmailIntent,
+    build_graph,
+    greet,
+)
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 
 FAKE_EMAILS = [
@@ -45,8 +53,34 @@ def test_planner_state_has_expected_fields():
         "calendar_events",
         "action_items",
         "intent",
+        "resolutions",
+        "pending_action_index",
         "status",
     }
+
+
+def test_action_resolution_holds_skip_remedy_with_no_proposal():
+    standup = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
+    )
+    client_sync = CalendarEvent(
+        id="e2",
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    item = CalendarOverlapConflict(
+        description="'Team Standup' overlaps with 'Client Sync'",
+        events=[standup, client_sync],
+    )
+
+    resolution = ActionResolution(action_item=item, remedy="skip")
+
+    assert resolution.remedy == "skip"
+    assert resolution.proposal is None
 
 
 def test_greet_emits_an_ai_message():
