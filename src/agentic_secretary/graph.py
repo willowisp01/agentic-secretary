@@ -44,6 +44,13 @@ class EmailConflict(BaseModel):
     description: str
     event: tools.CalendarEvent
     email: tools.EmailSummary
+    # The email's proposed time, kept (not just used transiently to compute
+    # the overlap) so a future remedy step has something to build a shift
+    # proposal from. Required, not optional: this type is only ever
+    # constructed once both are already confirmed non-null (see
+    # _find_email_actions).
+    proposed_start: datetime
+    proposed_duration_minutes: int
 
 
 class RescheduleRequest(BaseModel):
@@ -56,6 +63,11 @@ class RescheduleRequest(BaseModel):
     description: str
     event: tools.CalendarEvent
     email: tools.EmailSummary
+    # Optional, unlike EmailConflict's proposed_start/proposed_duration_minutes:
+    # not every reschedule email names a specific target time ("something
+    # came up, can we reschedule?" has none). No matching duration field --
+    # a reschedule moves an existing event that already has one.
+    proposed_reschedule_start: datetime | None = None
 
 
 ActionNeeded = Annotated[
@@ -124,6 +136,13 @@ class _EmailIntent(BaseModel):
         description="True only if the email explicitly asks to move or cancel "
         "references_event_id, as opposed to merely mentioning it in passing."
     )
+    proposed_reschedule_start: datetime | None = Field(
+        default=None,
+        description="If requests_reschedule is true and the email specifies a "
+        "target date/time for the move (e.g. 'Thursday, same time'), the "
+        "resolved datetime of that target. Null if no specific target time is "
+        "mentioned, or if requests_reschedule is false.",
+    )
 
     @model_validator(mode="after")
     def _normalize(self) -> "_EmailIntent":
@@ -141,15 +160,20 @@ class _EmailIntent(BaseModel):
             self.proposed_duration_minutes = None
         if not self.requests_reschedule:
             self.references_event_id = None
+            self.proposed_reschedule_start = None
 
         # Nothing forces the LLM to include an offset, and a naive datetime
         # compared against a timezone-aware CalendarEvent time raises
         # TypeError. The prompt tells the LLM to assume DEMO_TIMEZONE for
         # bare times, so treat a naive response the same way rather than
         # defaulting to UTC (which would silently shift it by 8 hours) or
-        # leaving it to crash the comparison in _find_email_actions.
-        if self.proposed_start is not None and self.proposed_start.tzinfo is None:
-            self.proposed_start = self.proposed_start.replace(tzinfo=DEMO_TIMEZONE)
+        # leaving it to crash downstream comparisons. Both time fields need
+        # this independently: proposed_start is gated on proposes_new_meeting,
+        # proposed_reschedule_start on requests_reschedule.
+        for field_name in ("proposed_start", "proposed_reschedule_start"):
+            value = getattr(self, field_name)
+            if value is not None and value.tzinfo is None:
+                setattr(self, field_name, value.replace(tzinfo=DEMO_TIMEZONE))
 
         return self
 
@@ -213,6 +237,8 @@ def _find_email_actions(
                             ),
                             event=event,
                             email=email,
+                            proposed_start=proposed_start,
+                            proposed_duration_minutes=intent.proposed_duration_minutes,
                         )
                     )
 
@@ -223,6 +249,7 @@ def _find_email_actions(
                     description=f"{email.subject!r} asks to reschedule {event.title!r}",
                     event=event,
                     email=email,
+                    proposed_reschedule_start=intent.proposed_reschedule_start,
                 )
             )
 

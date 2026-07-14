@@ -7,7 +7,13 @@ from pydantic import ValidationError
 
 from agentic_secretary import seed_data
 from agentic_secretary.config import DEMO_TIMEZONE
-from agentic_secretary.graph import CalendarOverlapConflict, _EmailIntent, detect_actions
+from agentic_secretary.graph import (
+    CalendarOverlapConflict,
+    EmailConflict,
+    RescheduleRequest,
+    _EmailIntent,
+    detect_actions,
+)
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 from seed_demo_data import resolve_relative_time
 
@@ -133,6 +139,32 @@ def test_email_intent_normalizes_naive_proposed_start_to_demo_timezone():
     assert intent.proposed_start == datetime(2026, 7, 14, 9, 0, tzinfo=DEMO_TIMEZONE)
 
 
+def test_email_intent_clears_proposed_reschedule_start_when_not_rescheduling():
+    intent = _EmailIntent(
+        proposes_new_meeting=False,
+        requests_reschedule=False,
+        proposed_reschedule_start="2026-07-16T09:15:00+00:00",
+    )
+
+    assert intent.proposed_reschedule_start is None
+
+
+def test_email_intent_normalizes_naive_proposed_reschedule_start_to_demo_timezone():
+    # A reschedule request can name a target time ("Thursday, same time")
+    # independently of proposes_new_meeting, which is always false for a
+    # reschedule-classified email -- so this field's naive-datetime handling
+    # needs the same DEMO_TIMEZONE fallback as proposed_start, gated on
+    # requests_reschedule instead.
+    intent = _EmailIntent(
+        proposes_new_meeting=False,
+        requests_reschedule=True,
+        references_event_id="evt_client_call",
+        proposed_reschedule_start="2026-07-16T09:15:00",
+    )
+
+    assert intent.proposed_reschedule_start == datetime(2026, 7, 16, 9, 15, tzinfo=DEMO_TIMEZONE)
+
+
 # _analyze_email is mocked below rather than calling a real LLM: these tests
 # assert on detect_actions' handling of the LLM's output (overlap math,
 # reschedule lookup), not on the LLM's own judgment, and no live API calls
@@ -156,6 +188,10 @@ def _intent_for(email_id: str) -> _EmailIntent:
             proposes_new_meeting=False,
             requests_reschedule=True,
             references_event_id="evt_client_call",
+            # Matches the fixture email's body: "push our client sync from
+            # tomorrow to Thursday instead? Same time works" -- two days
+            # after evt_client_call's "+1d 09:15", same time of day.
+            proposed_reschedule_start=resolve_relative_time("+3d 09:15", NOW),
         )
     return _no_intent()
 
@@ -174,6 +210,28 @@ def test_detect_actions_finds_email_meeting_request_conflict(mock_analyze):
 
     kinds = {item.kind for item in result["action_items"]}
     assert "email_conflict" in kinds
+
+
+@patch("agentic_secretary.graph._analyze_email")
+def test_detect_actions_email_conflict_carries_the_proposed_time(mock_analyze):
+    # EmailConflict used to discard the LLM-extracted proposed_start/duration
+    # after using them once to compute the overlap -- a future step that
+    # needs to generate a shift proposal would have nothing to work with.
+    mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
+    state = {
+        "emails": [MEETING_REQUEST_EMAIL],
+        "calendar_events": [STANDUP],
+        "action_items": [],
+        "status": "done",
+    }
+
+    result = detect_actions(state)
+
+    email_conflicts = [item for item in result["action_items"] if isinstance(item, EmailConflict)]
+    assert len(email_conflicts) == 1
+    expected_intent = _intent_for("email_meeting_request")
+    assert email_conflicts[0].proposed_start == expected_intent.proposed_start
+    assert email_conflicts[0].proposed_duration_minutes == expected_intent.proposed_duration_minutes
 
 
 @patch("agentic_secretary.graph._analyze_email")
@@ -214,6 +272,29 @@ def test_detect_actions_finds_reschedule_request(mock_analyze):
 
     kinds = {item.kind for item in result["action_items"]}
     assert "reschedule" in kinds
+
+
+@patch("agentic_secretary.graph._analyze_email")
+def test_detect_actions_reschedule_request_carries_the_proposed_time(mock_analyze):
+    # RescheduleRequest's target time used to be discarded before it ever
+    # reached _find_email_actions (nulled by _EmailIntent._normalize
+    # whenever proposes_new_meeting was false, which it always is for a
+    # reschedule-classified email) -- a future shift-proposal step would
+    # have no way to know the sender asked specifically for "Thursday".
+    mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
+    state = {
+        "emails": [RESCHEDULE_EMAIL],
+        "calendar_events": [CLIENT_CALL],
+        "action_items": [],
+        "status": "done",
+    }
+
+    result = detect_actions(state)
+
+    reschedules = [item for item in result["action_items"] if isinstance(item, RescheduleRequest)]
+    assert len(reschedules) == 1
+    expected_intent = _intent_for("email_reschedule")
+    assert reschedules[0].proposed_reschedule_start == expected_intent.proposed_reschedule_start
 
 
 @patch("agentic_secretary.graph._analyze_email")
