@@ -111,6 +111,11 @@ class PlannerState(TypedDict):
     resolutions: Annotated[list[ActionResolution], operator.add]
     # Which action_items entry is currently awaiting a menu choice.
     pending_action_index: int
+    # The remedy choice (proposal not yet filled in) awaiting
+    # content_generation, or None on an invalid menu choice that needs
+    # re-prompting. Set on every present_menu return, so always defined by
+    # the time its own routing function reads it.
+    pending_resolution: ActionResolution | None
     status: str
 
 
@@ -389,10 +394,10 @@ def present_menu(state: PlannerState) -> dict:
     try:
         remedy = remedies[int(choice_text.strip()) - 1]
     except (ValueError, IndexError):
-        # Invalid choice: record nothing and don't advance the index -- the
-        # routing after this node re-checks pending_action_index, which is
-        # unchanged, so it naturally re-shows this same menu.
-        return {}
+        # Invalid choice: record nothing -- the routing after this node
+        # checks pending_resolution, which stays None, so it re-shows this
+        # same menu rather than proceeding to content_generation.
+        return {"pending_resolution": None}
 
     shift_event_id: str | None = None
     if remedy == "shift_slot":
@@ -408,14 +413,107 @@ def present_menu(state: PlannerState) -> dict:
         else:
             shift_event_id = item.event.id
 
+    # Not yet appended to resolutions or advancing pending_action_index --
+    # content_generation (next) fills in proposal and finalizes both, since
+    # skip needs no LLM/tool call but shift_slot/draft_reply do.
     resolution = ActionResolution(action_item=item, remedy=remedy, shift_event_id=shift_event_id)
-    return {
-        "resolutions": [resolution],
-        "pending_action_index": state["pending_action_index"] + 1,
-    }
+    return {"pending_resolution": resolution}
 
 
 def _route_after_present_menu(state: PlannerState) -> str:
+    return "content_generation" if state["pending_resolution"] is not None else "present_menu"
+
+
+def _event_by_id(item: ActionNeeded, event_id: str) -> tools.CalendarEvent:
+    if isinstance(item, CalendarOverlapConflict | BackToBackConflict):
+        return next(e for e in item.events if e.id == event_id)
+    return item.event
+
+
+class _ShiftProposal(BaseModel):
+    new_start: datetime = Field(
+        description="The proposed new start time for the event being moved. "
+        "Must not overlap any of the busy times listed. If the request names "
+        "a specific target time, use it; otherwise pick a reasonable nearby "
+        "free slot."
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "_ShiftProposal":
+        if self.new_start.tzinfo is None:
+            self.new_start = self.new_start.replace(tzinfo=DEMO_TIMEZONE)
+        return self
+
+
+def _busy_times_context(
+    calendar_events: list[tools.CalendarEvent], resolutions: list[ActionResolution]
+) -> str:
+    lines = [f"- {e.title!r}: {e.start.isoformat()} to {e.end.isoformat()}" for e in calendar_events]
+    for r in resolutions:
+        if r.remedy == "shift_slot" and isinstance(r.proposal, tools.EventProposal):
+            proposed_end = r.proposal.start + timedelta(minutes=r.proposal.duration_minutes)
+            lines.append(
+                f"- {r.proposal.title!r} (already proposed this session): "
+                f"{r.proposal.start.isoformat()} to {proposed_end.isoformat()}"
+            )
+    return "\n".join(lines) or "(none)"
+
+
+def _generate_shift_proposal(
+    event_to_shift: tools.CalendarEvent,
+    item: ActionNeeded,
+    calendar_events: list[tools.CalendarEvent],
+    resolutions: list[ActionResolution],
+) -> tools.EventProposal:
+    hint = ""
+    if isinstance(item, RescheduleRequest) and item.proposed_reschedule_start is not None:
+        hint = f"\n\nThe email requested this specific new time: {item.proposed_reschedule_start.isoformat()}."
+    elif isinstance(item, EmailConflict):
+        avoid_end = item.proposed_start + timedelta(minutes=item.proposed_duration_minutes)
+        hint = (
+            f"\n\nThis event is being moved to make room for a different "
+            f"incoming request at {item.proposed_start.isoformat()} to "
+            f"{avoid_end.isoformat()} -- do not propose a time that still "
+            f"overlaps that."
+        )
+
+    prompt = (
+        f"Propose a new time to move {event_to_shift.title!r} "
+        f"(currently {event_to_shift.start.isoformat()} to "
+        f"{event_to_shift.end.isoformat()}), because: {item.description}"
+        f"{hint}\n\n"
+        f"Busy times to avoid:\n{_busy_times_context(calendar_events, resolutions)}"
+    )
+    llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
+    structured_llm = llm.with_structured_output(_ShiftProposal, method="json_schema")
+    result = structured_llm.invoke(prompt)
+
+    duration_minutes = int((event_to_shift.end - event_to_shift.start).total_seconds() // 60)
+    return tools.propose_event(
+        title=event_to_shift.title,
+        start=result.new_start,
+        duration_minutes=duration_minutes,
+        existing_event_id=event_to_shift.id,
+    )
+
+
+class _ReplyDraft(BaseModel):
+    body: str = Field(description="Body text for the reply email.")
+
+
+def _generate_reply_body(item: EmailConflict | RescheduleRequest) -> str:
+    prompt = (
+        "Draft a brief, professional reply to this email.\n\n"
+        f"Original subject: {item.email.subject}\n"
+        f"Original body:\n{item.email.body}\n\n"
+        f"Context: {item.description}"
+    )
+    llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
+    structured_llm = llm.with_structured_output(_ReplyDraft, method="json_schema")
+    return structured_llm.invoke(prompt).body
+
+
+def _route_after_content_generation(state: PlannerState) -> str:
     if state["pending_action_index"] >= len(state["action_items"]):
         return "end"
     return "present_menu"
@@ -431,6 +529,43 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
             "status": "done",
         }
 
+    def content_generation(state: PlannerState) -> dict:
+        pending = state["pending_resolution"]
+        item = pending.action_item
+
+        if pending.remedy == "skip":
+            proposal = None
+        elif pending.remedy == "shift_slot":
+            event_to_shift = _event_by_id(item, pending.shift_event_id)
+            proposal = _generate_shift_proposal(
+                event_to_shift, item, state["calendar_events"], state["resolutions"]
+            )
+        else:  # draft_reply -- only EmailConflict/RescheduleRequest offer it
+            body = _generate_reply_body(item)
+            original_subject = item.email.subject
+            subject = (
+                original_subject
+                if original_subject.lower().startswith("re:")
+                else f"Re: {original_subject}"
+            )
+            # draft_reply actually calls Gmail's drafts().create() (unlike
+            # propose_event, which is a pure constructor) -- never sends,
+            # but is a real API write, so it needs gmail_service in scope.
+            proposal = tools.draft_reply(
+                gmail_service,
+                to=item.email.from_,
+                subject=subject,
+                body=body,
+                thread_id=item.email.thread_id,
+            )
+
+        finalized = pending.model_copy(update={"proposal": proposal})
+        return {
+            "resolutions": [finalized],
+            "pending_action_index": state["pending_action_index"] + 1,
+            "pending_resolution": None,
+        }
+
     builder = StateGraph(PlannerState)
     builder.add_node("greet", greet)
     builder.add_node("classify_intent", classify_intent)
@@ -438,6 +573,7 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_node("check_calendar", check_calendar)
     builder.add_node("detect_actions", detect_actions)
     builder.add_node("present_menu", present_menu)
+    builder.add_node("content_generation", content_generation)
     builder.add_edge(START, "greet")
     builder.add_edge("greet", "classify_intent")
     builder.add_conditional_edges(
@@ -455,6 +591,11 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_conditional_edges(
         "present_menu",
         _route_after_present_menu,
+        {"content_generation": "content_generation", "present_menu": "present_menu"},
+    )
+    builder.add_conditional_edges(
+        "content_generation",
+        _route_after_content_generation,
         {"present_menu": "present_menu", "end": END},
     )
     return builder.compile(checkpointer=InMemorySaver())
