@@ -3,10 +3,11 @@ from typing import Annotated, Literal, TypedDict
 
 from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, AnyMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, model_validator
 
 from agentic_secretary import tools
@@ -78,11 +79,17 @@ ActionNeeded = Annotated[
 ]
 
 
+ChatIntentValue = Literal["check_actions", "others"]
+
+
 class PlannerState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     emails: list[tools.EmailSummary]
     calendar_events: list[tools.CalendarEvent]
     action_items: list[ActionNeeded]
+    # Routing signal for classify_intent's conditional edge, not
+    # conversation content -- overwritten each time classify_intent runs.
+    intent: ChatIntentValue
     status: str
 
 
@@ -270,6 +277,49 @@ def greet(state: PlannerState) -> dict:
     }
 
 
+class _ChatIntent(BaseModel):
+    intent: ChatIntentValue = Field(
+        description="'check_actions' if the user is asking to check for "
+        "scheduling conflicts or action items (e.g. 'check for conflicts', "
+        "'what's going on today'). 'others' for anything else, including "
+        "unclear or unrelated replies."
+    )
+
+
+def _classify_intent(reply: str) -> _ChatIntent:
+    llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
+    structured_llm = llm.with_structured_output(_ChatIntent, method="json_schema")
+    return structured_llm.invoke(
+        "Classify the user's reply in a chat session with a scheduling "
+        f"assistant.\n\nUser reply: {reply}"
+    )
+
+
+def classify_intent(state: PlannerState) -> dict:
+    # interrupt()'s value is what the CLI actually displays as the prompt,
+    # so show whatever the assistant last said -- the greeting on first
+    # entry, or the clarifying re-prompt appended below on a looped-back
+    # entry (self-loop edge re-invokes this same node).
+    last_ai_message = next(m for m in reversed(state["messages"]) if isinstance(m, AIMessage))
+    reply = interrupt(last_ai_message.content)
+
+    chat_intent = _classify_intent(reply)
+    new_messages: list[AnyMessage] = [HumanMessage(content=reply)]
+    if chat_intent.intent == "others":
+        new_messages.append(
+            AIMessage(
+                content="I didn't quite catch that -- try something like "
+                "'check for conflicts'."
+            )
+        )
+
+    return {"messages": new_messages, "intent": chat_intent.intent}
+
+
+def _route_after_classify_intent(state: PlannerState) -> str:
+    return state["intent"]
+
+
 def detect_actions(state: PlannerState) -> dict:
     calendar_events = state["calendar_events"]
     emails = state["emails"]
@@ -293,11 +343,17 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
 
     builder = StateGraph(PlannerState)
     builder.add_node("greet", greet)
+    builder.add_node("classify_intent", classify_intent)
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
     builder.add_node("detect_actions", detect_actions)
     builder.add_edge(START, "greet")
-    builder.add_edge("greet", "fetch_emails")
+    builder.add_edge("greet", "classify_intent")
+    builder.add_conditional_edges(
+        "classify_intent",
+        _route_after_classify_intent,
+        {"check_actions": "fetch_emails", "others": "classify_intent"},
+    )
     builder.add_edge("fetch_emails", "check_calendar")
     builder.add_edge("check_calendar", "detect_actions")
     builder.add_edge("detect_actions", END)

@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage
+from langgraph.types import Command
 
-from agentic_secretary.graph import PlannerState, _EmailIntent, build_graph, greet
+from agentic_secretary.graph import PlannerState, _ChatIntent, _EmailIntent, build_graph, greet
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 
 FAKE_EMAILS = [
@@ -43,6 +44,7 @@ def test_planner_state_has_expected_fields():
         "emails",
         "calendar_events",
         "action_items",
+        "intent",
         "status",
     }
 
@@ -60,46 +62,69 @@ def test_greet_emits_an_ai_message():
 @patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
-def test_greet_runs_before_fetch_emails_runs_before_check_calendar(
+def test_classify_intent_interrupts_with_the_latest_ai_message(
     mock_list_emails, mock_list_events, mock_analyze_email
 ):
+    # interrupt()'s value is what the CLI actually displays as the prompt --
+    # this proves greet's message reaches the human via classify_intent,
+    # not just that it sits unused in state.
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    result = graph.invoke(
+        {"emails": [], "calendar_events": [], "status": "pending"},
+        config=config,
+    )
+
+    assert "__interrupt__" in result
+    assert "scheduling assistant" in result["__interrupt__"][0].value
+
+
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
+def test_classify_intent_routes_to_fetch_emails_on_check_actions(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
+):
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
     graph, gmail_service, calendar_service = _build_test_graph()
     config = {"configurable": {"thread_id": "test"}}
 
-    states = list(
-        graph.stream(
-            {"emails": [], "calendar_events": [], "status": "pending"},
-            config=config,
-            stream_mode="values",
-        )
-    )
+    graph.invoke({"emails": [], "calendar_events": [], "status": "pending"}, config=config)
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
 
-    # states[0] is the input snapshot; states[1] after greet; states[2] after
-    # fetch_emails; states[3] after check_calendar.
-    assert states[1]["messages"]
-    assert states[1]["emails"] == []
-    assert states[2]["emails"] == FAKE_EMAILS
-    assert states[2]["calendar_events"] == []
-    assert states[3]["emails"] == FAKE_EMAILS
-    assert states[3]["calendar_events"] == FAKE_EVENTS
+    assert "__interrupt__" not in result
+    assert result["emails"] == FAKE_EMAILS
+    assert result["calendar_events"] == FAKE_EVENTS
+    assert result["status"] == "done"
 
     mock_list_emails.assert_called_once_with(gmail_service)
     mock_list_events.assert_called_once_with(calendar_service)
 
 
+@patch("agentic_secretary.graph._classify_intent")
 @patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
-def test_graph_invoke_returns_final_state_with_status_done(
-    mock_list_emails, mock_list_events, mock_analyze_email
+def test_classify_intent_loops_on_unrecognized_reply(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
 ):
+    mock_classify_intent.side_effect = [
+        _ChatIntent(intent="others"),
+        _ChatIntent(intent="check_actions"),
+    ]
     graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
 
-    result = graph.invoke(
-        {"emails": [], "calendar_events": [], "status": "pending"},
-        config={"configurable": {"thread_id": "test"}},
-    )
+    graph.invoke({"emails": [], "calendar_events": [], "status": "pending"}, config=config)
+    second_result = graph.invoke(Command(resume="asdf"), config=config)
 
-    assert result["emails"] == FAKE_EMAILS
-    assert result["calendar_events"] == FAKE_EVENTS
-    assert result["status"] == "done"
+    # Looped back to classify_intent instead of proceeding -- still paused,
+    # now showing the clarifying re-prompt rather than the original greeting.
+    assert "__interrupt__" in second_result
+    assert "didn't quite catch" in second_result["__interrupt__"][0].value
+
+    third_result = graph.invoke(Command(resume="check for conflicts"), config=config)
+    assert "__interrupt__" not in third_result
+    assert third_result["emails"] == FAKE_EMAILS
