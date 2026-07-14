@@ -1,9 +1,12 @@
+from datetime import timedelta
+
 from googleapiclient.discovery import build
 from langgraph.types import Command
 
 from agentic_secretary.auth import get_credentials
 from agentic_secretary.config import settings
 from agentic_secretary.graph import build_graph
+from agentic_secretary.tools import DraftResult, EventProposal
 
 
 def main() -> None:
@@ -44,6 +47,24 @@ def main() -> None:
     print(f"\nDetected {len(result['action_items'])} action items:")
     for item in result["action_items"]:
         print(f"  - [{item.kind}] {item.description}")
+
+    # A shift-slot proposal has no persisted artifact anywhere (unlike a
+    # Gmail draft, which the human can revisit later) -- this transcript is
+    # the only place it's ever visible, so show the actual proposed time.
+    print(f"\nResolved {len(result['resolutions'])} action items:")
+    for resolution in result["resolutions"]:
+        print(f"  - [{resolution.action_item.kind}] {resolution.action_item.description}")
+        print(f"    Remedy: {resolution.remedy}")
+        if isinstance(resolution.proposal, EventProposal):
+            proposed_end = resolution.proposal.start + timedelta(
+                minutes=resolution.proposal.duration_minutes
+            )
+            print(
+                f"    Proposed: move {resolution.proposal.title!r} to "
+                f"{resolution.proposal.start} - {proposed_end}"
+            )
+        elif isinstance(resolution.proposal, DraftResult):
+            print(f"    Draft created (id={resolution.proposal.draft_id})")
 
 
 if __name__ == "__main__":
