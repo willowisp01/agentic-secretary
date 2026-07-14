@@ -6,6 +6,7 @@ from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
@@ -519,6 +520,23 @@ def _route_after_content_generation(state: PlannerState) -> str:
     return "present_menu"
 
 
+# Every custom type that ends up inside PlannerState -- LangGraph's default
+# checkpoint serializer warns (and, in a future version, will refuse) to
+# deserialize any type outside its own built-in allowlist, since every
+# interrupt/resume round-trip goes through the checkpointer.
+_CHECKPOINT_ALLOWED_TYPES = (
+    tools.EmailSummary,
+    tools.CalendarEvent,
+    tools.EventProposal,
+    tools.DraftResult,
+    CalendarOverlapConflict,
+    BackToBackConflict,
+    EmailConflict,
+    RescheduleRequest,
+    ActionResolution,
+)
+
+
 def build_graph(gmail_service: Resource, calendar_service: Resource):
     def fetch_emails(state: PlannerState) -> dict:
         return {"emails": tools.list_recent_emails(gmail_service)}
@@ -598,4 +616,5 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
         _route_after_content_generation,
         {"present_menu": "present_menu", "end": END},
     )
-    return builder.compile(checkpointer=InMemorySaver())
+    serde = JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_ALLOWED_TYPES)
+    return builder.compile(checkpointer=InMemorySaver(serde=serde))

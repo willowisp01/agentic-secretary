@@ -462,3 +462,35 @@ def test_content_generation_advances_to_end_when_action_items_exhausted(
     assert "__interrupt__" not in result
     assert result["status"] == "done"
     assert len(result["resolutions"]) == 1
+
+
+@patch("agentic_secretary.graph._generate_shift_proposal")
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_checkpointing_does_not_warn_about_unregistered_types(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent, mock_shift_proposal, caplog
+):
+    # Reproduces a live-discovered gap: LangGraph's default checkpoint
+    # serializer warns (and, in a future version, will refuse) to
+    # deserialize any custom type it doesn't recognize, and every
+    # interrupt/resume round-trip goes through the checkpointer --
+    # CalendarEvent, CalendarOverlapConflict, and ActionResolution
+    # (EventProposal nested inside it) all flow through PlannerState.
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    mock_shift_proposal.return_value = EventProposal(
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 11, 0, tzinfo=timezone.utc),
+        duration_minutes=45,
+        existing_event_id="e2",
+    )
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    with caplog.at_level("WARNING"):
+        _advance_past_classify_intent(graph, config)
+        graph.invoke(Command(resume="1"), config=config)  # "1. Shift the slot"
+        graph.invoke(Command(resume="2"), config=config)  # move Client Sync (e2)
+
+    assert "unregistered type" not in caplog.text
