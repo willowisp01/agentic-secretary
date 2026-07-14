@@ -3,7 +3,7 @@ from typing import Annotated, Literal, TypedDict
 
 from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -259,6 +259,17 @@ def _find_email_actions(
     return actions
 
 
+def greet(state: PlannerState) -> dict:
+    return {
+        "messages": [
+            AIMessage(
+                content="Hi! I'm your scheduling assistant. Ask me to check "
+                "for conflicts and I'll take a look at your calendar and inbox."
+            )
+        ]
+    }
+
+
 def detect_actions(state: PlannerState) -> dict:
     calendar_events = state["calendar_events"]
     emails = state["emails"]
@@ -281,10 +292,12 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
         }
 
     builder = StateGraph(PlannerState)
+    builder.add_node("greet", greet)
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
     builder.add_node("detect_actions", detect_actions)
-    builder.add_edge(START, "fetch_emails")
+    builder.add_edge(START, "greet")
+    builder.add_edge("greet", "fetch_emails")
     builder.add_edge("fetch_emails", "check_calendar")
     builder.add_edge("check_calendar", "detect_actions")
     builder.add_edge("detect_actions", END)

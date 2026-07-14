@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from agentic_secretary.graph import PlannerState, _EmailIntent, build_graph
+from langchain_core.messages import AIMessage
+
+from agentic_secretary.graph import PlannerState, _EmailIntent, build_graph, greet
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 
 FAKE_EMAILS = [
@@ -45,10 +47,20 @@ def test_planner_state_has_expected_fields():
     }
 
 
+def test_greet_emits_an_ai_message():
+    result = greet(
+        {"messages": [], "emails": [], "calendar_events": [], "action_items": [], "status": "pending"}
+    )
+
+    assert len(result["messages"]) == 1
+    assert isinstance(result["messages"][0], AIMessage)
+    assert result["messages"][0].content
+
+
 @patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
-def test_fetch_emails_runs_before_check_calendar(
+def test_greet_runs_before_fetch_emails_runs_before_check_calendar(
     mock_list_emails, mock_list_events, mock_analyze_email
 ):
     graph, gmail_service, calendar_service = _build_test_graph()
@@ -62,11 +74,14 @@ def test_fetch_emails_runs_before_check_calendar(
         )
     )
 
-    # states[0] is the input snapshot; states[1] after fetch_emails; states[2] after check_calendar.
-    assert states[1]["emails"] == FAKE_EMAILS
-    assert states[1]["calendar_events"] == []
+    # states[0] is the input snapshot; states[1] after greet; states[2] after
+    # fetch_emails; states[3] after check_calendar.
+    assert states[1]["messages"]
+    assert states[1]["emails"] == []
     assert states[2]["emails"] == FAKE_EMAILS
-    assert states[2]["calendar_events"] == FAKE_EVENTS
+    assert states[2]["calendar_events"] == []
+    assert states[3]["emails"] == FAKE_EMAILS
+    assert states[3]["calendar_events"] == FAKE_EVENTS
 
     mock_list_emails.assert_called_once_with(gmail_service)
     mock_list_events.assert_called_once_with(calendar_service)
