@@ -7,6 +7,7 @@ from langgraph.types import Command
 from agentic_secretary.graph import (
     ActionResolution,
     CalendarOverlapConflict,
+    EmailConflict,
     PlannerState,
     _ChatIntent,
     _EmailIntent,
@@ -46,6 +47,29 @@ def _build_test_graph():
     return graph, gmail_service, calendar_service
 
 
+def _advance_past_classify_intent(graph, config):
+    # Every present_menu test needs to get past greet + classify_intent
+    # first; _classify_intent is mocked by the caller's @patch.
+    graph.invoke({"emails": [], "calendar_events": [], "status": "pending"}, config=config)
+    return graph.invoke(Command(resume="check for conflicts"), config=config)
+
+
+OVERLAPPING_EVENTS = [
+    CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
+    ),
+    CalendarEvent(
+        id="e2",
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc),
+    ),
+]
+
+
 def test_planner_state_has_expected_fields():
     assert set(PlannerState.__annotations__) == {
         "messages",
@@ -81,6 +105,7 @@ def test_action_resolution_holds_skip_remedy_with_no_proposal():
 
     assert resolution.remedy == "skip"
     assert resolution.proposal is None
+    assert resolution.shift_event_id is None
 
 
 def test_greet_emits_an_ai_message():
@@ -162,3 +187,115 @@ def test_classify_intent_loops_on_unrecognized_reply(
     third_result = graph.invoke(Command(resume="check for conflicts"), config=config)
     assert "__interrupt__" not in third_result
     assert third_result["emails"] == FAKE_EMAILS
+
+
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=[])
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_detect_actions_with_no_action_items_skips_present_menu(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
+):
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    result = _advance_past_classify_intent(graph, config)
+
+    assert "__interrupt__" not in result
+    assert result["action_items"] == []
+    assert any("No action items found" in m.content for m in result["messages"])
+
+
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_present_menu_shows_shift_and_skip_for_calendar_overlap(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
+):
+    # calendar_overlap has no email at all -- draft_reply must not appear.
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    result = _advance_past_classify_intent(graph, config)
+
+    assert "__interrupt__" in result
+    menu = result["__interrupt__"][0].value
+    assert "Shift the slot" in menu
+    assert "Skip" in menu
+    assert "Draft a reply" not in menu
+
+
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_present_menu_asks_which_event_when_shifting_a_two_event_kind(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
+):
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    _advance_past_classify_intent(graph, config)
+    which_event_result = graph.invoke(Command(resume="1"), config=config)  # "1. Shift the slot"
+
+    assert "__interrupt__" in which_event_result
+    assert "Which event should move?" in which_event_result["__interrupt__"][0].value
+
+    final_result = graph.invoke(Command(resume="2"), config=config)  # 2nd event listed
+
+    assert "__interrupt__" not in final_result
+    assert len(final_result["resolutions"]) == 1
+    resolution = final_result["resolutions"][0]
+    assert resolution.remedy == "shift_slot"
+    assert resolution.shift_event_id == "e2"
+    assert final_result["pending_action_index"] == 1
+
+
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_present_menu_records_skip_and_reaches_end(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
+):
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    _advance_past_classify_intent(graph, config)
+    result = graph.invoke(Command(resume="2"), config=config)  # "2. Skip"
+
+    assert "__interrupt__" not in result
+    assert len(result["resolutions"]) == 1
+    assert result["resolutions"][0].remedy == "skip"
+    assert result["resolutions"][0].proposal is None
+    assert result["pending_action_index"] == 1
+
+
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_present_menu_reprompts_the_same_item_on_invalid_choice(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent
+):
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    first_menu = _advance_past_classify_intent(graph, config)
+    retry_result = graph.invoke(Command(resume="not a number"), config=config)
+
+    # Same menu shown again -- pending_action_index never advanced, so the
+    # routing after present_menu re-enters it for the same item.
+    assert "__interrupt__" in retry_result
+    assert retry_result["__interrupt__"][0].value == first_menu["__interrupt__"][0].value
+    assert retry_result["resolutions"] == []
+
+    final_result = graph.invoke(Command(resume="2"), config=config)  # "2. Skip"
+    assert "__interrupt__" not in final_result
+    assert len(final_result["resolutions"]) == 1

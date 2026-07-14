@@ -86,6 +86,12 @@ ChatIntentValue = Literal["check_actions", "others"]
 class ActionResolution(BaseModel):
     action_item: ActionNeeded
     remedy: Literal["shift_slot", "draft_reply", "skip"]
+    # Which event to shift, set whenever remedy is "shift_slot" regardless
+    # of kind. CalendarOverlapConflict/BackToBackConflict reference two
+    # events, so this disambiguates which one -- rather than mutating
+    # action_item down to a single event, which would silently bypass its
+    # own exactly-2 arity validator.
+    shift_event_id: str | None = None
     # None for "skip" (no tool call) and, transiently, before the
     # content-generation step has produced a proposal for a remedy that
     # needs one.
@@ -343,7 +349,76 @@ def detect_actions(state: PlannerState) -> dict:
         + _find_back_to_back(calendar_events)
         + _find_email_actions(emails, calendar_events)
     )
-    return {"action_items": action_items}
+    result: dict = {"action_items": action_items, "pending_action_index": 0}
+    if not action_items:
+        result["messages"] = [AIMessage(content="No action items found -- everything looks clear!")]
+    return result
+
+
+def _route_after_detect_actions(state: PlannerState) -> str:
+    return "present_menu" if state["action_items"] else "end"
+
+
+_REMEDY_LABELS: dict[Literal["shift_slot", "draft_reply", "skip"], str] = {
+    "shift_slot": "Shift the slot",
+    "draft_reply": "Draft a reply email",
+    "skip": "Skip",
+}
+
+
+def _applicable_remedies(item: ActionNeeded) -> list[Literal["shift_slot", "draft_reply", "skip"]]:
+    # Deterministic, not LLM-judged: which remedies make sense is a
+    # structural fact about the item's type, not a judgment call. Every
+    # kind has at least one event to shift; only EmailConflict/
+    # RescheduleRequest have an email to reply to at all.
+    remedies: list[Literal["shift_slot", "draft_reply", "skip"]] = ["shift_slot"]
+    if isinstance(item, EmailConflict | RescheduleRequest):
+        remedies.append("draft_reply")
+    remedies.append("skip")
+    return remedies
+
+
+def present_menu(state: PlannerState) -> dict:
+    item = state["action_items"][state["pending_action_index"]]
+    remedies = _applicable_remedies(item)
+
+    menu_lines = [f"[{item.kind}] {item.description}"]
+    menu_lines += [f"{i}. {_REMEDY_LABELS[r]}" for i, r in enumerate(remedies, start=1)]
+    choice_text = interrupt("\n".join(menu_lines))
+
+    try:
+        remedy = remedies[int(choice_text.strip()) - 1]
+    except (ValueError, IndexError):
+        # Invalid choice: record nothing and don't advance the index -- the
+        # routing after this node re-checks pending_action_index, which is
+        # unchanged, so it naturally re-shows this same menu.
+        return {}
+
+    shift_event_id: str | None = None
+    if remedy == "shift_slot":
+        if isinstance(item, CalendarOverlapConflict | BackToBackConflict):
+            # Two events on this kind, unlike EmailConflict/RescheduleRequest
+            # (exactly one) -- ask which one, rather than guessing.
+            event_lines = [f"{i}. {e.title!r}" for i, e in enumerate(item.events, start=1)]
+            which_text = interrupt("Which event should move?\n" + "\n".join(event_lines))
+            try:
+                shift_event_id = item.events[int(which_text.strip()) - 1].id
+            except (ValueError, IndexError):
+                shift_event_id = item.events[0].id
+        else:
+            shift_event_id = item.event.id
+
+    resolution = ActionResolution(action_item=item, remedy=remedy, shift_event_id=shift_event_id)
+    return {
+        "resolutions": [resolution],
+        "pending_action_index": state["pending_action_index"] + 1,
+    }
+
+
+def _route_after_present_menu(state: PlannerState) -> str:
+    if state["pending_action_index"] >= len(state["action_items"]):
+        return "end"
+    return "present_menu"
 
 
 def build_graph(gmail_service: Resource, calendar_service: Resource):
@@ -362,6 +437,7 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
     builder.add_node("detect_actions", detect_actions)
+    builder.add_node("present_menu", present_menu)
     builder.add_edge(START, "greet")
     builder.add_edge("greet", "classify_intent")
     builder.add_conditional_edges(
@@ -371,5 +447,14 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     )
     builder.add_edge("fetch_emails", "check_calendar")
     builder.add_edge("check_calendar", "detect_actions")
-    builder.add_edge("detect_actions", END)
+    builder.add_conditional_edges(
+        "detect_actions",
+        _route_after_detect_actions,
+        {"present_menu": "present_menu", "end": END},
+    )
+    builder.add_conditional_edges(
+        "present_menu",
+        _route_after_present_menu,
+        {"present_menu": "present_menu", "end": END},
+    )
     return builder.compile(checkpointer=InMemorySaver())
