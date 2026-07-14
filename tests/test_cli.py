@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langgraph.types import Command
 
 from agentic_secretary.cli import main
 from agentic_secretary.graph import CalendarOverlapConflict
@@ -70,3 +72,30 @@ def test_main_prints_detected_action_items(capsys):
     captured = capsys.readouterr()
     assert "calendar_overlap" in captured.out
     assert "'Team Standup' overlaps with 'Client Sync'" in captured.out
+
+
+@patch("builtins.input", return_value="my answer")
+def test_main_resumes_on_interrupt_until_the_graph_finishes(mock_input):
+    # main() used to do a single one-shot invoke with no interrupt handling
+    # at all -- any node that pauses via interrupt() (classify_intent,
+    # present_menu, ...) would have nothing driving the resume.
+    with (
+        patch("agentic_secretary.cli.settings") as mock_settings,
+        patch("agentic_secretary.cli.get_credentials"),
+        patch("agentic_secretary.cli.build"),
+        patch("agentic_secretary.cli.build_graph") as mock_build_graph,
+    ):
+        mock_settings.anthropic_api_key = "fake-key"
+        mock_graph = MagicMock()
+        mock_graph.invoke.side_effect = [
+            {"__interrupt__": (SimpleNamespace(value="Check for conflicts?"),)},
+            {"emails": [], "calendar_events": [], "action_items": [], "status": "done"},
+        ]
+        mock_build_graph.return_value = mock_graph
+
+        main()
+
+    assert mock_graph.invoke.call_count == 2
+    mock_input.assert_called_once_with("Check for conflicts?> ")
+    resume_call_args = mock_graph.invoke.call_args_list[1]
+    assert resume_call_args.args[0] == Command(resume="my answer")

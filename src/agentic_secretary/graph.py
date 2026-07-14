@@ -3,8 +3,10 @@ from typing import Annotated, Literal, TypedDict
 
 from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AnyMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field, model_validator
 
 from agentic_secretary import tools
@@ -77,6 +79,7 @@ ActionNeeded = Annotated[
 
 
 class PlannerState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
     emails: list[tools.EmailSummary]
     calendar_events: list[tools.CalendarEvent]
     action_items: list[ActionNeeded]

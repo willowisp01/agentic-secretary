@@ -37,6 +37,7 @@ def _build_test_graph():
 
 def test_planner_state_has_expected_fields():
     assert set(PlannerState.__annotations__) == {
+        "messages",
         "emails",
         "calendar_events",
         "action_items",
