@@ -23,8 +23,8 @@ FAKE_EVENTS = [
         end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
     )
 ]
-# detect_conflicts now runs on every invoke; stub its LLM call so these
-# fetch/check tests stay about fetch/check, not conflict detection.
+# detect_actions now runs on every invoke; stub its LLM call so these
+# fetch/check tests stay about fetch/check, not action detection.
 NO_INTENT = _EmailIntent(proposes_new_meeting=False, requests_reschedule=False)
 
 
@@ -39,7 +39,7 @@ def test_planner_state_has_expected_fields():
     assert set(PlannerState.__annotations__) == {
         "emails",
         "calendar_events",
-        "conflicts",
+        "action_items",
         "status",
     }
 

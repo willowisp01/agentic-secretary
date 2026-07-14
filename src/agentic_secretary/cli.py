@@ -9,7 +9,7 @@ def main() -> None:
     if not settings.anthropic_api_key:
         raise SystemExit(
             "ANTHROPIC_API_KEY is not set (check your .env) -- required for "
-            "conflict detection."
+            "action detection."
         )
 
     credentials = get_credentials()
@@ -30,9 +30,9 @@ def main() -> None:
     for event in result["calendar_events"]:
         print(f"  - [{event.start} - {event.end}] {event.title}")
 
-    print(f"\nDetected {len(result['conflicts'])} conflicts:")
-    for conflict in result["conflicts"]:
-        print(f"  - [{conflict['kind']}] {conflict['description']}")
+    print(f"\nDetected {len(result['action_items'])} action items:")
+    for item in result["action_items"]:
+        print(f"  - [{item.kind}] {item.description}")
 
 
 if __name__ == "__main__":

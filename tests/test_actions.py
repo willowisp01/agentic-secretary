@@ -2,8 +2,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from agentic_secretary import seed_data
-from agentic_secretary.graph import _EmailIntent, detect_conflicts
+from agentic_secretary.graph import CalendarOverlapConflict, _EmailIntent, detect_actions
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 from seed_demo_data import resolve_relative_time
 
@@ -51,30 +54,38 @@ MENTION_EMAIL = _email("email_casual_mention")
 DIGEST_EMAIL = _email("email_internal_digest")
 
 
-def test_detect_conflicts_finds_calendar_overlap():
-    state = {"emails": [], "calendar_events": [STANDUP, CLIENT_CALL], "conflicts": [], "status": "done"}
+def test_detect_actions_finds_calendar_overlap():
+    state = {"emails": [], "calendar_events": [STANDUP, CLIENT_CALL], "action_items": [], "status": "done"}
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {item.kind for item in result["action_items"]}
     assert "calendar_overlap" in kinds
 
 
-def test_detect_conflicts_finds_back_to_back():
-    state = {"emails": [], "calendar_events": [LUNCH, REVIEW], "conflicts": [], "status": "done"}
+def test_detect_actions_finds_back_to_back():
+    state = {"emails": [], "calendar_events": [LUNCH, REVIEW], "action_items": [], "status": "done"}
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {item.kind for item in result["action_items"]}
     assert "back_to_back" in kinds
 
 
-def test_detect_conflicts_no_false_positive_for_well_spaced_events():
-    state = {"emails": [], "calendar_events": [STANDUP, LUNCH], "conflicts": [], "status": "done"}
+def test_detect_actions_no_false_positive_for_well_spaced_events():
+    state = {"emails": [], "calendar_events": [STANDUP, LUNCH], "action_items": [], "status": "done"}
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    assert result["conflicts"] == []
+    assert result["action_items"] == []
+
+
+def test_calendar_overlap_conflict_requires_exactly_two_events():
+    # The arity invariant used to be enforced only by convention (every
+    # caller happened to pass exactly 2 events) rather than by the type
+    # itself. This proves it's now a real, enforced constraint.
+    with pytest.raises(ValidationError):
+        CalendarOverlapConflict(description="bad", events=[STANDUP])
 
 
 def test_email_intent_clears_reference_id_when_not_rescheduling():
@@ -121,7 +132,7 @@ def test_email_intent_normalizes_naive_proposed_start_to_utc():
 
 
 # _analyze_email is mocked below rather than calling a real LLM: these tests
-# assert on detect_conflicts' handling of the LLM's output (overlap math,
+# assert on detect_actions' handling of the LLM's output (overlap math,
 # reschedule lookup), not on the LLM's own judgment, and no live API calls
 # belong in the automated suite (see docs/spec/ai-secretary.md Testing Strategy).
 def _no_intent() -> _EmailIntent:
@@ -148,23 +159,23 @@ def _intent_for(email_id: str) -> _EmailIntent:
 
 
 @patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_finds_email_meeting_request_conflict(mock_analyze):
+def test_detect_actions_finds_email_meeting_request_conflict(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
     state = {
         "emails": [MEETING_REQUEST_EMAIL],
         "calendar_events": [STANDUP],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {item.kind for item in result["action_items"]}
     assert "email_conflict" in kinds
 
 
 @patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_finds_email_conflict_with_zero_duration_proposal(mock_analyze):
+def test_detect_actions_finds_email_conflict_with_zero_duration_proposal(mock_analyze):
     # Reproduces a bug: a truthiness check (`and intent.proposed_duration_minutes`)
     # treated a legitimate 0-minute proposal the same as "unset", silently
     # skipping conflict detection for it.
@@ -177,42 +188,42 @@ def test_detect_conflicts_finds_email_conflict_with_zero_duration_proposal(mock_
     state = {
         "emails": [MEETING_REQUEST_EMAIL],
         "calendar_events": [STANDUP],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {item.kind for item in result["action_items"]}
     assert "email_conflict" in kinds
 
 
 @patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_finds_reschedule_request(mock_analyze):
+def test_detect_actions_finds_reschedule_request(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
     state = {
         "emails": [RESCHEDULE_EMAIL],
         "calendar_events": [CLIENT_CALL],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {item.kind for item in result["action_items"]}
     assert "reschedule" in kinds
 
 
 @patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_no_false_positive_for_mention_and_digest_emails(mock_analyze):
+def test_detect_actions_no_false_positive_for_mention_and_digest_emails(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
     state = {
         "emails": [MENTION_EMAIL, DIGEST_EMAIL],
         "calendar_events": [CLIENT_CALL],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    assert result["conflicts"] == []
+    assert result["action_items"] == []

@@ -1,12 +1,15 @@
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agentic_secretary.cli import main
+from agentic_secretary.graph import CalendarOverlapConflict
+from agentic_secretary.tools import CalendarEvent
 
 
 def test_main_exits_before_side_effects_when_anthropic_api_key_missing():
-    # Reproduces a live-discovered gap: detect_conflicts now runs on every
+    # Reproduces a live-discovered gap: detect_actions now runs on every
     # invocation and constructs ChatAnthropic per email, which previously
     # crashed deep inside the graph -- after real Gmail/Calendar API calls
     # had already run -- if ANTHROPIC_API_KEY was unset. Fail fast instead,
@@ -23,20 +26,30 @@ def test_main_exits_before_side_effects_when_anthropic_api_key_missing():
         mock_get_credentials.assert_not_called()
 
 
-def test_main_prints_detected_conflicts(capsys):
-    # detect_conflicts populates PlannerState["conflicts"] but main() never
+def test_main_prints_detected_action_items(capsys):
+    # detect_actions populates PlannerState["action_items"] but main() never
     # surfaced it -- a user running the CLI had no visibility into whether
-    # any conflicts were found at all.
+    # any action items were found at all.
+    standup = CalendarEvent(
+        id="evt_standup",
+        title="Team Standup",
+        start=datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 14, 9, 30, tzinfo=timezone.utc),
+    )
+    client_sync = CalendarEvent(
+        id="evt_client_sync",
+        title="Client Sync",
+        start=datetime(2026, 7, 14, 9, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 14, 10, 0, tzinfo=timezone.utc),
+    )
     fake_result = {
         "emails": [],
         "calendar_events": [],
-        "conflicts": [
-            {
-                "kind": "calendar_overlap",
-                "description": "'Team Standup' overlaps with 'Client Sync'",
-                "events": [],
-                "email": None,
-            }
+        "action_items": [
+            CalendarOverlapConflict(
+                description="'Team Standup' overlaps with 'Client Sync'",
+                events=[standup, client_sync],
+            )
         ],
         "status": "done",
     }

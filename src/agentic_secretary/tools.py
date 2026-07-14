@@ -81,7 +81,7 @@ def _parse_event_time(time_field: dict[str, str]) -> datetime:
         return datetime.fromisoformat(time_field["dateTime"])
     # All-day events have no inherent timezone from the API; normalize to
     # UTC so this is always comparable against timed events' timezone-aware
-    # datetimes elsewhere (e.g. detect_conflicts' overlap checks), which
+    # datetimes elsewhere (e.g. detect_actions' overlap checks), which
     # would otherwise raise TypeError comparing naive vs. aware datetimes.
     return datetime.fromisoformat(time_field["date"]).replace(tzinfo=timezone.utc)
 

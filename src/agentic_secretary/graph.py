@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
@@ -15,49 +15,87 @@ from agentic_secretary.config import settings
 NO_BUFFER_THRESHOLD = timedelta(minutes=15)
 
 
-class Conflict(TypedDict):
-    kind: str
+class CalendarOverlapConflict(BaseModel):
+    kind: Literal["calendar_overlap"] = "calendar_overlap"
     description: str
     events: list[tools.CalendarEvent]
-    email: tools.EmailSummary | None
+
+    @model_validator(mode="after")
+    def _check_arity(self) -> "CalendarOverlapConflict":
+        if len(self.events) != 2:
+            raise ValueError("calendar_overlap requires exactly 2 events")
+        return self
+
+
+class BackToBackConflict(BaseModel):
+    kind: Literal["back_to_back"] = "back_to_back"
+    description: str
+    events: list[tools.CalendarEvent]
+
+    @model_validator(mode="after")
+    def _check_arity(self) -> "BackToBackConflict":
+        if len(self.events) != 2:
+            raise ValueError("back_to_back requires exactly 2 events")
+        return self
+
+
+class EmailConflict(BaseModel):
+    kind: Literal["email_conflict"] = "email_conflict"
+    description: str
+    event: tools.CalendarEvent
+    email: tools.EmailSummary
+
+
+class RescheduleRequest(BaseModel):
+    # Not a time collision like the other three kinds: it flags an email that
+    # asks to move/cancel a referenced event (no start/end comparison is
+    # involved). Kept in the same ActionNeeded union because it goes through
+    # the same detect_actions -> remedy-menu pipeline as the true
+    # time-collision kinds.
+    kind: Literal["reschedule"] = "reschedule"
+    description: str
+    event: tools.CalendarEvent
+    email: tools.EmailSummary
+
+
+ActionNeeded = Annotated[
+    CalendarOverlapConflict | BackToBackConflict | EmailConflict | RescheduleRequest,
+    Field(discriminator="kind"),
+]
 
 
 class PlannerState(TypedDict):
     emails: list[tools.EmailSummary]
     calendar_events: list[tools.CalendarEvent]
-    conflicts: list[Conflict]
+    action_items: list[ActionNeeded]
     status: str
 
 
-def _find_calendar_overlaps(events: list[tools.CalendarEvent]) -> list[Conflict]:
-    conflicts: list[Conflict] = []
+def _find_calendar_overlaps(events: list[tools.CalendarEvent]) -> list[CalendarOverlapConflict]:
+    conflicts: list[CalendarOverlapConflict] = []
     sorted_events = sorted(events, key=lambda e: e.start)
     for i, a in enumerate(sorted_events):
         for b in sorted_events[i + 1 :]:
             if a.start < b.end and b.start < a.end:
                 conflicts.append(
-                    Conflict(
-                        kind="calendar_overlap",
+                    CalendarOverlapConflict(
                         description=f"{a.title!r} overlaps with {b.title!r}",
                         events=[a, b],
-                        email=None,
                     )
                 )
     return conflicts
 
 
-def _find_back_to_back(events: list[tools.CalendarEvent]) -> list[Conflict]:
-    conflicts: list[Conflict] = []
+def _find_back_to_back(events: list[tools.CalendarEvent]) -> list[BackToBackConflict]:
+    conflicts: list[BackToBackConflict] = []
     sorted_events = sorted(events, key=lambda e: e.start)
     for a, b in zip(sorted_events, sorted_events[1:]):
         gap = b.start - a.end
         if timedelta(0) <= gap <= NO_BUFFER_THRESHOLD:
             conflicts.append(
-                Conflict(
-                    kind="back_to_back",
+                BackToBackConflict(
                     description=f"{a.title!r} ends right as {b.title!r} starts, no buffer",
                     events=[a, b],
-                    email=None,
                 )
             )
     return conflicts
@@ -108,7 +146,7 @@ class _EmailIntent(BaseModel):
         # datetime compared against a timezone-aware CalendarEvent time
         # raises TypeError. The prompt gives the LLM UTC-anchored times, so
         # treat a naive response as UTC rather than leaving it to crash the
-        # comparison in _find_email_conflicts.
+        # comparison in _find_email_actions.
         if self.proposed_start is not None and self.proposed_start.tzinfo is None:
             self.proposed_start = self.proposed_start.replace(tzinfo=timezone.utc)
 
@@ -143,10 +181,13 @@ def _analyze_email(
     return structured_llm.invoke(prompt)
 
 
-def _find_email_conflicts(
+def _find_email_actions(
     emails: list[tools.EmailSummary], calendar_events: list[tools.CalendarEvent]
-) -> list[Conflict]:
-    conflicts: list[Conflict] = []
+) -> list[EmailConflict | RescheduleRequest]:
+    # One loop, one _analyze_email call per email: the two checks below both
+    # need the same LLM-extracted intent, so splitting this into two
+    # functions would double the LLM calls per email for no benefit.
+    actions: list[EmailConflict | RescheduleRequest] = []
     events_by_id = {event.id: event for event in calendar_events}
 
     for email in emails:
@@ -161,40 +202,38 @@ def _find_email_conflicts(
             proposed_end = proposed_start + timedelta(minutes=intent.proposed_duration_minutes)
             for event in calendar_events:
                 if proposed_start < event.end and event.start < proposed_end:
-                    conflicts.append(
-                        Conflict(
-                            kind="email_conflict",
+                    actions.append(
+                        EmailConflict(
                             description=(
                                 f"{email.subject!r} requests a time overlapping {event.title!r}"
                             ),
-                            events=[event],
+                            event=event,
                             email=email,
                         )
                     )
 
         if intent.requests_reschedule and intent.references_event_id in events_by_id:
             event = events_by_id[intent.references_event_id]
-            conflicts.append(
-                Conflict(
-                    kind="reschedule",
+            actions.append(
+                RescheduleRequest(
                     description=f"{email.subject!r} asks to reschedule {event.title!r}",
-                    events=[event],
+                    event=event,
                     email=email,
                 )
             )
 
-    return conflicts
+    return actions
 
 
-def detect_conflicts(state: PlannerState) -> dict:
+def detect_actions(state: PlannerState) -> dict:
     calendar_events = state["calendar_events"]
     emails = state["emails"]
-    conflicts = (
+    action_items: list[ActionNeeded] = (
         _find_calendar_overlaps(calendar_events)
         + _find_back_to_back(calendar_events)
-        + _find_email_conflicts(emails, calendar_events)
+        + _find_email_actions(emails, calendar_events)
     )
-    return {"conflicts": conflicts}
+    return {"action_items": action_items}
 
 
 def build_graph(gmail_service: Resource, calendar_service: Resource):
@@ -210,9 +249,9 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder = StateGraph(PlannerState)
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
-    builder.add_node("detect_conflicts", detect_conflicts)
+    builder.add_node("detect_actions", detect_actions)
     builder.add_edge(START, "fetch_emails")
     builder.add_edge("fetch_emails", "check_calendar")
-    builder.add_edge("check_calendar", "detect_conflicts")
-    builder.add_edge("detect_conflicts", END)
+    builder.add_edge("check_calendar", "detect_actions")
+    builder.add_edge("detect_actions", END)
     return builder.compile(checkpointer=InMemorySaver())

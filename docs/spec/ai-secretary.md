@@ -102,10 +102,10 @@ class PlannerState(TypedDict):
                                                            # human input, menu replies
     emails: list[EmailSummary]
     calendar_events: list[CalendarEvent]
-    conflicts: list[Conflict]
-    pending_conflict_index: int          # which conflict is awaiting a menu choice
-    resolutions: Annotated[list[ConflictResolution], operator.add]  # chosen
-                                                           # remedy per conflict
+    action_items: list[ActionNeeded]
+    pending_action_index: int             # which action item is awaiting a menu choice
+    resolutions: Annotated[list[ActionResolution], operator.add]  # chosen
+                                                           # remedy per action item
 
 def check_calendar(state: PlannerState) -> dict:
     events = tools.list_upcoming_events(calendar_service)
@@ -117,8 +117,8 @@ spread — so each field's reducer (default: replace; `add_messages`/
 `operator.add`: append) decides how it merges. `PlannerState` grows
 incrementally with the graph: the Task 6 skeleton (`fetch_emails →
 check_calendar`) only needs `emails`/`calendar_events`/`status`; `messages`,
-`conflicts`, `pending_conflict_index`, and `resolutions` are added once the
-conflict-detection and chat-menu nodes that use them exist (Task 7/8).
+`action_items`, `pending_action_index`, and `resolutions` are added once the
+action-detection and chat-menu nodes that use them exist (Task 7/8).
 
 - Tools are thin wrappers around the Google API clients — no business logic
   in the tool layer; reasoning belongs in graph nodes / prompts.
@@ -132,13 +132,13 @@ conflict-detection and chat-menu nodes that use them exist (Task 7/8).
   in unit tests) — verify tool functions parse/shape data correctly.
 - `tests/test_graph.py`: run the compiled LangGraph app against fixture
   state (not live APIs) and assert on graph wiring/state shape.
-- `tests/test_conflicts.py`: exercise `detect_conflicts` (deterministic
+- `tests/test_actions.py`: exercise `detect_actions` (deterministic
   overlap/back-to-back math, plus the LLM-assisted email patterns with
   `_analyze_email` mocked — no live Anthropic calls in the automated suite,
   same "no live API calls" rule as the Google clients) against fixture data
   loaded from the real `seed_data/*.yaml`, not hand-duplicated lookalikes.
 - No coverage percentage target for a portfolio project of this size;
-  prioritize covering the conflict-detection logic and tool-parsing edges
+  prioritize covering the action-detection logic and tool-parsing edges
   over exhaustive coverage.
 - Live-API smoke testing (actually hitting the burner Gmail/Calendar) is
   manual, via `uv run python -m agentic_secretary.cli` against seeded data —
@@ -158,18 +158,24 @@ conflict-detection and chat-menu nodes that use them exist (Task 7/8).
   `credentials.json`; auto-send emails or auto-book events without a human
   approval step; deploy this publicly/hosted (local-only per intent doc).
 
-## Conflict Response Behavior
+## Action Response Behavior
+
+The calendar is the source of truth: every `ActionNeeded` item is anchored
+to at least one `CalendarEvent`, and an email is only ever checked against
+the calendar, never against another email. Action detection has no
+email-vs-email case for this reason (see the `ActionNeeded` shape in
+Architecture above).
 
 Milestone 1 does not prescribe per-pattern draft content (i.e. no fixed
 template like "for a calendar-calendar overlap, always draft X"). Instead,
-once `detect_conflicts` finds a conflict, the agent presents it in a chat
+once `detect_actions` finds an action item, the agent presents it in a chat
 turn and offers the human a menu:
 
 1. **Shift the slot** — calls `propose_event(...)`, producing a structured
    `EventProposal`. Never calls Calendar's `insert`/`patch`.
 2. **Draft a reply email** — calls `draft_reply(...)`, producing a Gmail
    draft via `drafts.create`. Never calls `send`.
-3. **Skip** — no tool call; the conflict is left unresolved for this run.
+3. **Skip** — no tool call; the action item is left unresolved for this run.
 
 The human's choice determines the action; the agent does not unilaterally
 author and present a single draft for approve/reject. Both menu actions
@@ -188,13 +194,13 @@ human-in-the-loop confirmation.
       the seeded account: the agent greets the user, the user asks it to
       check for conflicts, the agent fetches emails/calendar, detects the
       seeded conflict, and presents a remedy menu (shift slot / draft email
-      / skip) per the Conflict Response Behavior above.
+      / skip) per the Action Response Behavior above.
 - [ ] No action (send/create) happens without an explicit human menu choice
       in the chat flow, and even a chosen remedy only ever produces a
       proposal (draft or structured event), never a send/insert/patch call.
 - [ ] A LangSmith trace exists for the run and shows the node-by-node
       reasoning path.
-- [ ] `uv run pytest` passes, covering tool-parsing and conflict-detection
+- [ ] `uv run pytest` passes, covering tool-parsing and action-detection
       logic against fixture data (no live API calls in the test suite).
 
 ## Seed Data — Conflict Patterns (Milestone 1 scope: time conflicts only)
@@ -217,6 +223,6 @@ client vs. internal meeting importance) are out of scope for milestone 1.
 None outstanding. Resolved: lint/format tool is Ruff; LangGraph checkpointer
 is in-memory for milestone 1 (resets each CLI run — revisit if a later demo
 wants to show resuming a paused/interrupted session); milestone 1 entry
-point is a chat loop rather than a fixed no-input pipeline, and conflict
+point is a chat loop rather than a fixed no-input pipeline, and action
 response is a human-chosen remedy via menu rather than a bot-authored draft
-per conflict pattern (see Conflict Response Behavior above).
+per conflict pattern (see Action Response Behavior above).
