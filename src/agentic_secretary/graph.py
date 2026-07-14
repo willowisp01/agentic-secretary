@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 
 from googleapiclient.discovery import Resource
@@ -8,7 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, model_validator
 
 from agentic_secretary import tools
-from agentic_secretary.config import settings
+from agentic_secretary.config import DEMO_TIMEZONE, settings
 
 # Gap threshold under which two adjacent events count as "back-to-back, no
 # buffer" (soft conflict) rather than just a normally-spaced schedule.
@@ -142,13 +142,14 @@ class _EmailIntent(BaseModel):
         if not self.requests_reschedule:
             self.references_event_id = None
 
-        # Nothing forces the LLM to include a UTC offset, and a naive
-        # datetime compared against a timezone-aware CalendarEvent time
-        # raises TypeError. The prompt gives the LLM UTC-anchored times, so
-        # treat a naive response as UTC rather than leaving it to crash the
-        # comparison in _find_email_actions.
+        # Nothing forces the LLM to include an offset, and a naive datetime
+        # compared against a timezone-aware CalendarEvent time raises
+        # TypeError. The prompt tells the LLM to assume DEMO_TIMEZONE for
+        # bare times, so treat a naive response the same way rather than
+        # defaulting to UTC (which would silently shift it by 8 hours) or
+        # leaving it to crash the comparison in _find_email_actions.
         if self.proposed_start is not None and self.proposed_start.tzinfo is None:
-            self.proposed_start = self.proposed_start.replace(tzinfo=timezone.utc)
+            self.proposed_start = self.proposed_start.replace(tzinfo=DEMO_TIMEZONE)
 
         return self
 
@@ -176,7 +177,10 @@ def _analyze_email(
         f"Email received at: {email.received_at.isoformat()}\n"
         f"Subject: {email.subject}\n"
         f"Body:\n{email.body}\n\n"
-        f"Existing calendar events:\n{events_context}"
+        f"Existing calendar events:\n{events_context}\n\n"
+        f"If the email mentions a time with no explicit UTC offset (e.g. "
+        f"\"9:15am\"), assume it's in {DEMO_TIMEZONE}, matching the calendar "
+        f"events above."
     )
     return structured_llm.invoke(prompt)
 

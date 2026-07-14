@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_secretary import seed_data
+from agentic_secretary.config import DEMO_TIMEZONE
 from agentic_secretary.graph import CalendarOverlapConflict, _EmailIntent, detect_actions
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 from seed_demo_data import resolve_relative_time
@@ -115,12 +116,13 @@ def test_email_intent_clears_proposed_time_when_no_new_meeting():
     assert intent.proposed_duration_minutes is None
 
 
-def test_email_intent_normalizes_naive_proposed_start_to_utc():
+def test_email_intent_normalizes_naive_proposed_start_to_demo_timezone():
     # Reproduces a live-discovered gap: nothing in the schema/prompt forces
-    # the LLM to include a UTC offset, and a naive datetime compared against
-    # a timezone-aware CalendarEvent time raises TypeError. The prompt gives
-    # the LLM UTC-anchored times, so a naive response is normalized as UTC
-    # rather than left to crash downstream comparisons.
+    # the LLM to include an offset, and a naive datetime compared against a
+    # timezone-aware CalendarEvent time raises TypeError. The prompt tells
+    # the LLM to assume DEMO_TIMEZONE for bare times, so a naive response is
+    # normalized the same way -- defaulting to UTC instead would silently
+    # shift a real "9am" mention by 8 hours.
     intent = _EmailIntent(
         proposes_new_meeting=True,
         requests_reschedule=False,
@@ -128,7 +130,7 @@ def test_email_intent_normalizes_naive_proposed_start_to_utc():
         proposed_duration_minutes=30,
     )
 
-    assert intent.proposed_start == datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc)
+    assert intent.proposed_start == datetime(2026, 7, 14, 9, 0, tzinfo=DEMO_TIMEZONE)
 
 
 # _analyze_email is mocked below rather than calling a real LLM: these tests

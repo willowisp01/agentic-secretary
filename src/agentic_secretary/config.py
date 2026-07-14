@@ -1,11 +1,19 @@
 import os
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DEFAULT_MODEL_NAME = "claude-haiku-4-5"
+
+# The seeded burner account's fictional persona is anchored to this
+# timezone. Bare (offset-less) clock times -- "+1d 09:00" in a seed fixture,
+# "9:15am" mentioned in an email body -- are resolved against this rather
+# than UTC, so "9am" actually means 9am in the persona's local time instead
+# of 9am UTC (which would display as 5pm locally).
+DEMO_TIMEZONE = timezone(timedelta(hours=8))
 
 
 @dataclass(frozen=True)

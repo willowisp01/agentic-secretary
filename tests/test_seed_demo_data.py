@@ -71,6 +71,28 @@ def test_build_event_insert_body_computes_end_from_duration():
     assert body["end"]["dateTime"] == expected_end.isoformat()
 
 
+def test_seed_uses_demo_timezone_for_default_now():
+    # Reproduces a live-discovered bug: seed() defaulted `now` to UTC, so a
+    # day-time fixture like "+1d 09:00" (meant as 9am in the demo persona's
+    # local time) was inserted as 9am UTC -- landing at 5pm in the burner
+    # account's actual +08:00 calendar. No `now=` override here: this
+    # exercises the real default, unlike the other tests in this file.
+    gmail_service = MagicMock()
+    gmail_service.users.return_value.messages.return_value.insert.return_value.execute.return_value = {
+        "id": "m1"
+    }
+    calendar_service = MagicMock()
+    calendar_service.events.return_value.insert.return_value.execute.return_value = {
+        "id": "e1"
+    }
+
+    seed(gmail_service, calendar_service)
+
+    events = calendar_service.events.return_value
+    first_call_body = events.insert.call_args_list[0].kwargs["body"]
+    assert first_call_body["start"]["dateTime"].endswith("+08:00")
+
+
 def test_seed_inserts_all_fixture_emails_and_events_via_direct_api_calls():
     gmail_service = MagicMock()
     gmail_service.users.return_value.messages.return_value.insert.return_value.execute.return_value = {

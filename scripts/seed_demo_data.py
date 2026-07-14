@@ -11,7 +11,7 @@ appear already-received, and `events().insert()` for real calendar events.
 
 import base64
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from googleapiclient.discovery import Resource, build
 
 from _google_account_safety import confirm_target_account
 from agentic_secretary.auth import load_credentials
-from agentic_secretary.config import settings
+from agentic_secretary.config import DEMO_TIMEZONE, settings
 from agentic_secretary.seed_data import (
     CalendarEvent,
     Email,
@@ -120,7 +120,10 @@ def seed(
     now: datetime | None = None,
 ) -> None:
     """Load, validate, and insert all seed_data fixtures into the given services."""
-    now = now or datetime.now(timezone.utc)
+    # DEMO_TIMEZONE, not UTC: fixtures like "+1d 09:00" are meant as 9am in
+    # the persona's local time, and resolve_relative_time's day-time branch
+    # anchors to whatever tzinfo `now` carries.
+    now = now or datetime.now(DEMO_TIMEZONE)
 
     emails = load_emails(SEED_DATA_DIR / "emails.yaml")
     events = load_calendar_events(SEED_DATA_DIR / "calendar_events.yaml")
