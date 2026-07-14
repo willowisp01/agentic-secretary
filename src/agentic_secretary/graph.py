@@ -89,6 +89,11 @@ class _EmailIntent(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "_EmailIntent":
+        # Unlike a typical mode="after" validator that rejects an invalid
+        # instance (e.g. raising when width != height), this one repairs it:
+        # LLM output is expected to be inconsistent sometimes, and erroring
+        # out on every such response would be worse than just fixing it up.
+        #
         # The LLM boundary isn't trustworthy about leaving unrelated fields
         # null (observed live: a digest email that mentions no event at all
         # still got a real, valid event id attached to references_event_id).
