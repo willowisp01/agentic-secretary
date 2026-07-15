@@ -264,13 +264,16 @@ LLM-interpreted, human-confirmed multi-remedy plans (see Action Response
 Behavior above) — live testing found the fixed-menu design couldn't
 express "shift AND draft" for one item, and silently produced duplicate,
 contradictory Gmail drafts when one email conflicted with two calendar
-events.
+events. Resolved 2026-07-15: shared-event-linking across different
+`ActionNeeded` kinds — live testing confirmed the same calendar event
+(Client Sync) got shifted to two contradictory times by two independently-
+detected action items in one session. `confirm_plan` now deterministically
+surfaces prior same-session resolutions that touch the same event as an
+advisory note (`_related_resolutions`/`_related_resolution_note`), and
+`propose_plan` feeds the same context into its own prompt so the plan
+itself can account for it rather than just contradicting it.
 
 Deferred, not blocking milestone 1:
-- **Shared-event-linking across different `ActionNeeded` kinds** — e.g. a
-  back-to-back pair where one event is also independently named in a
-  reschedule email. Cheap to add later (thread sibling-item context into
-  the remedy-planning prompt, no schema change needed) — not scheduled.
 - **No way to originate a fresh email for a pure calendar-calendar
   conflict** — those items have no attached email/thread, and `draft_reply`
   requires an existing `thread_id` (reply-only, not fresh-compose). Good to
