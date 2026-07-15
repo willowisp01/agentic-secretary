@@ -133,11 +133,21 @@ class PlannerState(TypedDict):
     pending_action_index: int
     # A clarifying question from propose_plan, when it couldn't determine
     # an essential plan detail even with a reasonable default (e.g. which
-    # of two candidate events to shift). present_item shows this (then
-    # clears it) instead of silently defaulting through to a confirm_plan
-    # gate the human has no way to actually answer with a clarification.
-    # None when the last propose_plan run produced a normal plan.
+    # of two candidate events to shift). present_item shows this (propose_
+    # plan clears/replaces it once consumed, not present_item -- it's still
+    # needed as prior-question context for interpreting the reply) instead
+    # of silently defaulting through to a confirm_plan gate the human has
+    # no way to actually answer with a clarification. None when the last
+    # propose_plan run produced a normal plan.
     pending_clarification: str | None
+    # How many consecutive times propose_plan has asked for clarification
+    # on the current item without resolving it. A deterministic circuit
+    # breaker -- live testing found needs_clarification could fire
+    # indefinitely for some replies (worst case: "you decide", which should
+    # never need clarification at all), hanging the session. Reset to 0
+    # once a real plan forms; propose_plan stops asking and forces a
+    # default past _MAX_CLARIFICATION_ROUNDS regardless of what the LLM says.
+    pending_clarification_rounds: int
     # Remedies queued for the current action item (state["action_items"]
     # [pending_action_index]), populated by propose_plan once confirmed by
     # confirm_plan. content_generation (Task 8.6) pops one at a time --
@@ -401,6 +411,7 @@ def detect_actions(state: PlannerState) -> dict:
         "action_items": action_items,
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
     }
     if not action_items:
         result["messages"] = [AIMessage(content="No action items found -- everything looks clear!")]
@@ -484,14 +495,16 @@ class _ProposedPlan(BaseModel):
         "determined even with a reasonable default -- this applies ONLY to "
         "a calendar_overlap or back_to_back item (exactly two candidate "
         "events, no sensible default for which one) when the reply chooses "
-        "shift_slot without indicating which event. When true, remedies/"
+        "shift_slot without naming either event. When true, remedies/"
         "shift_event_ids/explicit_time/summary are ignored; only "
         "clarifying_question is used. Do not set this for an email_conflict "
         "item -- it can have several candidate events, and shifting all of "
         "them to make room is already the sensible default, not an "
-        "ambiguity. Do not set this just because the reply is terse (e.g. "
-        "\"shift\" for an item with only one candidate event, or \"you "
-        "decide\", are NOT ambiguous -- a sensible default applies).",
+        "ambiguity. NEVER set this when the reply delegates the decision "
+        "(e.g. \"you decide\", \"whatever works\") -- pick an event "
+        "yourself in that case, don't ask. Do not set this just because the "
+        "reply is terse otherwise (e.g. \"shift\" for an item with only one "
+        "candidate event is NOT ambiguous -- a sensible default applies).",
     )
     clarifying_question: str = Field(
         default="",
@@ -578,25 +591,41 @@ def _propose_plan(item: ActionNeeded, reply: str, prior_question: str | None = N
         f"{prior_question_context}"
         f"Human's reply: {reply!r}\n\n"
         "Only choose remedies from the applicable list above -- ignore anything "
-        "the reply names that isn't in it. If the reply asks the assistant to "
-        "decide (e.g. \"you decide\"), pick whichever applicable remedies make "
-        f"sense for this item. If the reply names a specific target time "
-        f"(clock time, e.g. \"3pm\"; symbolic, e.g. \"lunchtime\"; or relative, "
-        f"e.g. \"same day\", \"Thursday\"), resolve it to an absolute datetime "
-        f"using the candidate events' start/end above as the anchor date, and "
-        f"set explicit_time -- don't leave it null just because the reference "
-        f"isn't a bare clock time. If the reply mentions a time with no "
-        f"explicit UTC offset, assume it's in {DEMO_TIMEZONE}.\n\n"
+        "the reply names that isn't in it.\n\n"
         "If this is a calendar_overlap or back_to_back item, it has exactly "
-        "two candidate events -- if shift_slot is chosen and the reply "
-        "doesn't indicate which one, don't guess -- set "
-        "needs_clarification=true and ask which event in "
-        "clarifying_question instead. This does not apply to email_conflict: "
-        "if it has several candidate events and the reply doesn't "
-        "disambiguate, that means shift all of them to make room, which is "
-        "not ambiguous."
+        "two candidate events -- if shift_slot is chosen and the reply names "
+        "neither one, don't guess -- set needs_clarification=true and ask "
+        "which event in clarifying_question instead. This does not apply to "
+        "email_conflict: if it has several candidate events and the reply "
+        "doesn't disambiguate, that means shift all of them to make room, "
+        "which is not ambiguous.\n\n"
+        "EXCEPTION to the paragraph above, which overrides it: if the reply "
+        "asks the assistant to decide for itself (e.g. \"you decide\", "
+        "\"whatever works\", \"your call\"), NEVER set needs_clarification, "
+        "even on a calendar_overlap/back_to_back item -- pick whichever "
+        "applicable remedies make sense, and if shift_slot applies, pick "
+        "either candidate event yourself rather than asking which one. "
+        "needs_clarification exists only for when the human tried to specify "
+        "something and fell short, never for when they explicitly handed the "
+        "decision to you.\n\n"
+        f"If the reply names a specific target time (clock time, e.g. "
+        f"\"3pm\"; symbolic, e.g. \"lunchtime\"; or relative, e.g. \"same "
+        f"day\", \"Thursday\"), resolve it to an absolute datetime using the "
+        f"candidate events' start/end above as the anchor date, and set "
+        f"explicit_time -- don't leave it null just because the reference "
+        f"isn't a bare clock time. If the reply mentions a time with no "
+        f"explicit UTC offset, assume it's in {DEMO_TIMEZONE}."
     )
     return structured_llm.invoke(prompt)
+
+
+# Deterministic circuit breaker -- live testing found needs_clarification
+# could fire indefinitely for some replies (worst case: "you decide",
+# which should never need clarification at all per _propose_plan's prompt),
+# hanging the session with no way out. One retry is allowed for a genuine
+# ambiguity; past that, propose_plan stops asking and forces a default
+# regardless of what the LLM says on the next call.
+_MAX_CLARIFICATION_ROUNDS = 1
 
 
 def propose_plan(state: PlannerState) -> dict:
@@ -604,26 +633,44 @@ def propose_plan(state: PlannerState) -> dict:
     last_human_message = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
     plan = _propose_plan(item, last_human_message.content, state["pending_clarification"])
 
-    if plan.needs_clarification:
+    clarification_rounds = state["pending_clarification_rounds"]
+    if plan.needs_clarification and clarification_rounds < _MAX_CLARIFICATION_ROUNDS:
         # Nothing here is ready to show as a plan to confirm -- route
         # straight back to present_item with the model's own question,
         # rather than presenting a hedging/incomplete summary at a yes/no
         # gate the human has no way to actually answer with a clarification.
         return {
             "pending_clarification": plan.clarifying_question,
+            "pending_clarification_rounds": clarification_rounds + 1,
             "pending_remedies": [],
             "pending_shift_event_ids": [],
             "pending_explicit_time": None,
             "pending_plan_summary": "",
         }
 
-    # Deterministic validation, not trusted blindly: an LLM response naming
-    # a remedy that isn't actually applicable to this item's kind must never
-    # reach content_generation.
     applicable = _applicable_remedies(item)
-    remedies = list(dict.fromkeys(r for r in plan.remedies if r in applicable))
-    if not remedies:
-        remedies = ["skip"]
+    if plan.needs_clarification:
+        # Circuit breaker tripped: still unresolved after a retry.
+        # shift_slot is the only remedy that ever triggers
+        # needs_clarification (see _propose_plan's prompt) -- force it with
+        # the same first-event default used below when a reply doesn't
+        # disambiguate, rather than silently falling back to skip (a
+        # different, more conservative action than what was actually asked
+        # for) or asking a third time.
+        remedies: list[RemedyLiteral] = ["shift_slot"]
+        summary = (
+            f"I couldn't tell which event you meant, so I'm shifting "
+            f"{_item_events(item)[0].title!r} -- let me know if you meant "
+            f"the other one."
+        )
+    else:
+        # Deterministic validation, not trusted blindly: an LLM response
+        # naming a remedy that isn't actually applicable to this item's
+        # kind must never reach content_generation.
+        remedies = list(dict.fromkeys(r for r in plan.remedies if r in applicable))
+        if not remedies:
+            remedies = ["skip"]
+        summary = plan.summary
 
     shift_event_ids: list[str] = []
     if "shift_slot" in remedies:
@@ -641,10 +688,11 @@ def propose_plan(state: PlannerState) -> dict:
 
     return {
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "pending_remedies": remedies,
         "pending_shift_event_ids": shift_event_ids,
         "pending_explicit_time": plan.explicit_time,
-        "pending_plan_summary": plan.summary,
+        "pending_plan_summary": summary,
     }
 
 

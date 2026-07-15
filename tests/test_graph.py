@@ -98,6 +98,7 @@ def test_planner_state_has_expected_fields():
         "resolutions",
         "pending_action_index",
         "pending_clarification",
+        "pending_clarification_rounds",
         "pending_remedies",
         "pending_shift_event_ids",
         "pending_explicit_time",
@@ -304,6 +305,7 @@ def test_propose_plan_filters_out_inapplicable_remedies(mock_propose_plan):
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -324,6 +326,7 @@ def test_propose_plan_supports_multiple_remedies(mock_propose_plan):
         "action_items": [EMAIL_CONFLICT_TWO_EVENTS],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift it and accept the meeting")],
     }
 
@@ -340,6 +343,7 @@ def test_propose_plan_defaults_to_skip_when_nothing_applicable_remains(mock_prop
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="draft something")],
     }
 
@@ -357,6 +361,7 @@ def test_propose_plan_defaults_shift_event_ids_to_all_events_for_email_conflict(
         "action_items": [EMAIL_CONFLICT_TWO_EVENTS],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -373,6 +378,7 @@ def test_propose_plan_defaults_shift_event_ids_to_first_event_for_pairwise_kind(
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -391,6 +397,7 @@ def test_propose_plan_uses_llm_disambiguated_shift_event_id(mock_propose_plan):
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift Client Sync")],
     }
 
@@ -413,6 +420,7 @@ def test_propose_plan_carries_explicit_time_and_summary(mock_propose_plan):
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift it to 3pm")],
     }
 
@@ -439,6 +447,7 @@ def test_propose_plan_routes_to_clarification_when_llm_flags_it(mock_propose_pla
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": None,
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="shift")],
     }
 
@@ -451,6 +460,41 @@ def test_propose_plan_routes_to_clarification_when_llm_flags_it(mock_propose_pla
     assert result["pending_shift_event_ids"] == []
     assert result["pending_explicit_time"] is None
     assert result["pending_plan_summary"] == ""
+    assert result["pending_clarification_rounds"] == 1
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_circuit_breaker_forces_shift_slot_after_rounds_exhausted(mock_propose_plan):
+    # Live-discovered gap: needs_clarification could fire indefinitely for
+    # some replies (worst case: "you decide", which per _propose_plan's
+    # prompt should never need clarification at all) -- confirmed live as
+    # a genuine infinite loop with no way out. Once the retry budget is
+    # spent, propose_plan must stop asking and force a decision regardless
+    # of what the LLM says on the next call.
+    mock_propose_plan.return_value = _ProposedPlan(
+        needs_clarification=True,
+        clarifying_question="Which event should move -- Team Standup or Client Sync?",
+        summary="I'll shift one of the overlapping events.",
+    )
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "pending_clarification": "Which event should move -- Team Standup or Client Sync?",
+        "pending_clarification_rounds": 1,  # already at _MAX_CLARIFICATION_ROUNDS
+        "messages": [HumanMessage(content="you decide")],
+    }
+
+    result = propose_plan(state)
+
+    # Forced a real plan instead of asking a third time -- never silently
+    # falls back to skip, which is a different, more conservative action
+    # than what was actually being asked about.
+    assert result["pending_clarification"] is None
+    assert result["pending_clarification_rounds"] == 0
+    assert result["pending_remedies"] == ["shift_slot"]
+    assert result["pending_shift_event_ids"] == ["e1"]
+    assert result["pending_plan_summary"] != ""
 
 
 @patch("agentic_secretary.graph._propose_plan")
@@ -466,6 +510,7 @@ def test_propose_plan_passes_pending_clarification_as_prior_question(mock_propos
         "action_items": [item],
         "pending_action_index": 0,
         "pending_clarification": "Which event should move -- Team Standup or Client Sync?",
+        "pending_clarification_rounds": 0,
         "messages": [HumanMessage(content="team standup")],
     }
 
@@ -1092,6 +1137,59 @@ def test_full_flow_clarification_answer_carries_the_prior_question(
     second_call = mock_propose_plan.call_args_list[1]
     assert second_call.args[1] == "team standup"
     assert second_call.args[2] == "Which event should move -- Team Standup or Client Sync?"
+
+
+@patch("agentic_secretary.graph._generate_shift_proposal")
+@patch("agentic_secretary.graph._propose_plan")
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_full_flow_repeated_needs_clarification_terminates_instead_of_looping(
+    mock_list_emails,
+    mock_list_events,
+    mock_analyze_email,
+    mock_classify_intent,
+    mock_propose_plan,
+    mock_shift_proposal,
+):
+    # Live-confirmed as a genuine infinite loop: replying "you decide" to a
+    # calendar_overlap/back_to_back item kept re-asking "which event should
+    # move?" no matter what was said next, including plain "yes" -- the
+    # session never reached a confirm_plan gate at all. propose_plan's own
+    # circuit breaker must force a decision after one retry, regardless of
+    # how many times the LLM itself claims it still needs clarification.
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    mock_propose_plan.return_value = _ProposedPlan(
+        needs_clarification=True,
+        clarifying_question="Which event should move -- Team Standup or Client Sync?",
+        summary="I'll shift one of the overlapping events.",
+    )
+    mock_shift_proposal.return_value = EventProposal(
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc),
+        duration_minutes=30,
+        existing_event_id="e1",
+    )
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    _advance_past_classify_intent(graph, config)
+    first_reprompt = _advance_past_present_item(graph, config, "you decide")
+    assert "__interrupt__" in first_reprompt
+    assert "Which event should move" in first_reprompt["__interrupt__"][0].value
+
+    # Second round: the LLM (mocked) still insists on needs_clarification,
+    # exactly like the live "you decide" case -- but the circuit breaker
+    # must have exhausted its one retry by now and force a plan anyway,
+    # landing on confirm_plan's gate instead of asking a third time.
+    second_result = _advance_past_present_item(graph, config, "you decide")
+    assert "__interrupt__" in second_result
+    assert "Confirm this plan?" in second_result["__interrupt__"][0].value
+
+    final_result = graph.invoke(Command(resume="yes"), config=config)
+    assert "__interrupt__" not in final_result
+    assert final_result["resolutions"][0].remedy == "shift_slot"
 
 
 @patch("agentic_secretary.graph._propose_plan")
