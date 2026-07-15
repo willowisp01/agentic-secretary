@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from agentic_secretary.graph import PlannerState, _EmailIntent, build_graph
+from agentic_secretary.detection import _EmailIntent
+from agentic_secretary.graph import build_graph
+from agentic_secretary.state import PlannerState
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 
 FAKE_EMAILS = [
@@ -23,7 +25,7 @@ FAKE_EVENTS = [
         end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
     )
 ]
-# detect_conflicts now runs on every invoke; stub its LLM call so these
+# detect_actions now runs on every invoke; stub its LLM call so these
 # fetch/check tests stay about fetch/check, not conflict detection.
 NO_INTENT = _EmailIntent(proposes_new_meeting=False, requests_reschedule=False)
 
@@ -37,14 +39,15 @@ def _build_test_graph():
 
 def test_planner_state_has_expected_fields():
     assert set(PlannerState.__annotations__) == {
+        "messages",
         "emails",
         "calendar_events",
-        "conflicts",
+        "action_items",
         "status",
     }
 
 
-@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
 def test_fetch_emails_runs_before_check_calendar(
@@ -71,7 +74,7 @@ def test_fetch_emails_runs_before_check_calendar(
     mock_list_events.assert_called_once_with(calendar_service)
 
 
-@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
 def test_graph_invoke_returns_final_state_with_status_done(

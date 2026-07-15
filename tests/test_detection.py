@@ -3,16 +3,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentic_secretary import seed_data
-from agentic_secretary.graph import _EmailIntent, detect_conflicts
+from agentic_secretary.detection import _EmailIntent, detect_actions
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 from seed_demo_data import resolve_relative_time
 
 SEED_DATA_DIR = Path(__file__).resolve().parent.parent / "seed_data"
 NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
 
-_FIXTURE_EMAILS = {e.id: e for e in seed_data.load_emails(SEED_DATA_DIR / "emails.yaml")}
+_FIXTURE_EMAILS = {
+    e.id: e for e in seed_data.load_emails(SEED_DATA_DIR / "emails.yaml")
+}
 _FIXTURE_EVENTS = {
-    e.id: e for e in seed_data.load_calendar_events(SEED_DATA_DIR / "calendar_events.yaml")
+    e.id: e
+    for e in seed_data.load_calendar_events(SEED_DATA_DIR / "calendar_events.yaml")
 }
 
 
@@ -51,30 +54,45 @@ MENTION_EMAIL = _email("email_casual_mention")
 DIGEST_EMAIL = _email("email_internal_digest")
 
 
-def test_detect_conflicts_finds_calendar_overlap():
-    state = {"emails": [], "calendar_events": [STANDUP, CLIENT_CALL], "conflicts": [], "status": "done"}
+def test_detect_actions_finds_calendar_overlap():
+    state = {
+        "emails": [],
+        "calendar_events": [STANDUP, CLIENT_CALL],
+        "action_items": [],
+        "status": "done",
+    }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {a.kind for a in result["action_items"]}
     assert "calendar_overlap" in kinds
 
 
-def test_detect_conflicts_finds_back_to_back():
-    state = {"emails": [], "calendar_events": [LUNCH, REVIEW], "conflicts": [], "status": "done"}
+def test_detect_actions_finds_back_to_back():
+    state = {
+        "emails": [],
+        "calendar_events": [LUNCH, REVIEW],
+        "action_items": [],
+        "status": "done",
+    }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {a.kind for a in result["action_items"]}
     assert "back_to_back" in kinds
 
 
-def test_detect_conflicts_no_false_positive_for_well_spaced_events():
-    state = {"emails": [], "calendar_events": [STANDUP, LUNCH], "conflicts": [], "status": "done"}
+def test_detect_actions_no_false_positive_for_well_spaced_events():
+    state = {
+        "emails": [],
+        "calendar_events": [STANDUP, LUNCH],
+        "action_items": [],
+        "status": "done",
+    }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    assert result["conflicts"] == []
+    assert result["action_items"] == []
 
 
 def test_email_intent_clears_reference_id_when_not_rescheduling():
@@ -105,7 +123,7 @@ def test_email_intent_clears_proposed_time_when_no_new_meeting():
 
 
 # _analyze_email is mocked below rather than calling a real LLM: these tests
-# assert on detect_conflicts' handling of the LLM's output (overlap math,
+# assert on detect_actions' handling of the LLM's output (overlap math,
 # reschedule lookup), not on the LLM's own judgment, and no live API calls
 # belong in the automated suite (see docs/spec/ai-secretary.md Testing Strategy).
 def _no_intent() -> _EmailIntent:
@@ -131,48 +149,84 @@ def _intent_for(email_id: str) -> _EmailIntent:
     return _no_intent()
 
 
-@patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_finds_email_meeting_request_conflict(mock_analyze):
+@patch("agentic_secretary.detection._analyze_email")
+def test_detect_actions_finds_email_meeting_request_conflict(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
     state = {
         "emails": [MEETING_REQUEST_EMAIL],
         "calendar_events": [STANDUP],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {a.kind for a in result["action_items"]}
     assert "email_conflict" in kinds
 
 
-@patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_finds_reschedule_request(mock_analyze):
+@patch("agentic_secretary.detection._analyze_email")
+def test_detect_actions_finds_reschedule_request(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
     state = {
         "emails": [RESCHEDULE_EMAIL],
         "calendar_events": [CLIENT_CALL],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    kinds = {c["kind"] for c in result["conflicts"]}
+    kinds = {a.kind for a in result["action_items"]}
     assert "reschedule" in kinds
 
 
-@patch("agentic_secretary.graph._analyze_email")
-def test_detect_conflicts_no_false_positive_for_mention_and_digest_emails(mock_analyze):
+@patch("agentic_secretary.detection._analyze_email")
+def test_detect_actions_no_false_positive_for_mention_and_digest_emails(mock_analyze):
     mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
     state = {
         "emails": [MENTION_EMAIL, DIGEST_EMAIL],
         "calendar_events": [CLIENT_CALL],
-        "conflicts": [],
+        "action_items": [],
         "status": "done",
     }
 
-    result = detect_conflicts(state)
+    result = detect_actions(state)
 
-    assert result["conflicts"] == []
+    assert result["action_items"] == []
+
+
+@patch("agentic_secretary.detection._analyze_email")
+def test_detect_actions_groups_multiple_overlapping_events_into_one_email_conflict(
+    mock_analyze,
+):
+    # The multi-event fix: an email whose proposed time collides with more
+    # than one existing event should produce a single EmailConflict
+    # referencing all of them, not one EmailConflict per collided event.
+    early = CalendarEvent(
+        id="e1", title="Early Meeting", start=NOW, end=NOW + timedelta(minutes=60)
+    )
+    late = CalendarEvent(
+        id="e2",
+        title="Late Meeting",
+        start=NOW + timedelta(minutes=30),
+        end=NOW + timedelta(minutes=90),
+    )
+    mock_analyze.return_value = _EmailIntent(
+        proposes_new_meeting=True,
+        requests_reschedule=False,
+        proposed_start=NOW,
+        proposed_duration_minutes=90,
+    )
+    state = {
+        "emails": [MEETING_REQUEST_EMAIL],
+        "calendar_events": [early, late],
+        "action_items": [],
+        "status": "done",
+    }
+
+    result = detect_actions(state)
+
+    email_conflicts = [a for a in result["action_items"] if a.kind == "email_conflict"]
+    assert len(email_conflicts) == 1
+    assert {e.id for e in email_conflicts[0].events} == {"e1", "e2"}
