@@ -15,6 +15,7 @@ from agentic_secretary.tools import (
     make_draft_reply_tool,
     propose_event,
     propose_event_tool,
+    withdraw_proposal_tool,
 )
 
 
@@ -244,9 +245,7 @@ def test_draft_reply_tool_serializes_concurrent_calls():
         call_log.append(("end", threading.get_ident()))
         return {"id": "draft1", "message": {"id": "m2", "threadId": "t1"}}
 
-    service.users.return_value.drafts.return_value.create.return_value.execute.side_effect = (
-        slow_execute
-    )
+    service.users.return_value.drafts.return_value.create.return_value.execute.side_effect = slow_execute
     draft_reply_tool = make_draft_reply_tool(service)
 
     def call() -> None:
@@ -279,3 +278,23 @@ def test_draft_reply_tool_serializes_concurrent_calls():
 
     assert result == DraftResult(draft_id="draft1", thread_id="t1")
     service.users.return_value.messages.return_value.send.assert_not_called()
+
+
+def test_withdraw_proposal_tool_returns_the_key_as_content():
+    # No content_and_artifact needed here -- review.py's _latest_proposals
+    # only needs the withdrawn key back, which is exactly what gets passed
+    # in, so the plain string return value *is* the ToolMessage's .content
+    # once invoked as a real tool call.
+    assert withdraw_proposal_tool.name == "withdraw_proposal"
+    assert withdraw_proposal_tool.description
+
+    message = withdraw_proposal_tool.invoke(
+        {
+            "name": "withdraw_proposal",
+            "args": {"event_id_or_title": "e2"},
+            "id": "call_1",
+            "type": "tool_call",
+        }
+    )
+
+    assert message.content == "e2"

@@ -53,6 +53,14 @@ def _proposal_message_as_dict(proposal: EventProposal) -> ToolMessage:
     )
 
 
+def _withdrawal_message(event_id_or_title: str) -> ToolMessage:
+    return ToolMessage(
+        content=event_id_or_title,
+        name="withdraw_proposal",
+        tool_call_id="call_withdraw",
+    )
+
+
 def test_collision_note_is_none_when_nothing_was_proposed():
     assert _collision_note(_base_state()) is None
 
@@ -79,6 +87,72 @@ def test_collision_note_flags_two_proposals_that_overlap():
     assert note is not None
     assert "Client Sync" in note
     assert "Team Standup" in note
+
+
+def test_withdraw_proposal_excludes_it_from_latest_proposals():
+    # Live-discovered: the agent proposed a time, later decided against it
+    # in favor of asking for alternatives, but never called propose_event
+    # again -- so the original proposal stayed "the latest" forever, and
+    # the collision note kept flagging a conflict the conversation had
+    # already moved past.
+    proposal = EventProposal(title="Q3 Roadmap Sync", start=NOW, duration_minutes=30)
+    state = _base_state(
+        messages=[_proposal_message(proposal), _withdrawal_message("Q3 Roadmap Sync")]
+    )
+
+    assert _latest_proposals(state["messages"]) == []
+
+
+def test_collision_note_stops_flagging_a_withdrawn_proposal():
+    standup = EventProposal(title="Team Standup", start=NOW, duration_minutes=30)
+    quick_sync = EventProposal(
+        title="Q3 Roadmap Sync", start=NOW + timedelta(minutes=15), duration_minutes=30
+    )
+    state = _base_state(
+        messages=[
+            _proposal_message(standup),
+            _proposal_message(quick_sync),
+            _withdrawal_message("Q3 Roadmap Sync"),
+        ]
+    )
+
+    assert _collision_note(state) is None
+
+
+def test_withdrawal_only_clears_the_matching_key_not_everything():
+    standup = EventProposal(title="Team Standup", start=NOW, duration_minutes=30)
+    quick_sync = EventProposal(
+        title="Q3 Roadmap Sync", start=NOW + timedelta(minutes=15), duration_minutes=30
+    )
+    state = _base_state(
+        messages=[
+            _proposal_message(standup),
+            _proposal_message(quick_sync),
+            _withdrawal_message("Q3 Roadmap Sync"),
+        ]
+    )
+
+    remaining = _latest_proposals(state["messages"])
+    assert remaining == [standup]
+
+
+def test_reproposing_after_a_withdrawal_brings_it_back():
+    # Order matters: a later propose_event call for the same key should
+    # win over an earlier withdrawal, the same way a later proposal
+    # already wins over an earlier one.
+    original = EventProposal(title="Q3 Roadmap Sync", start=NOW, duration_minutes=30)
+    reproposed = EventProposal(
+        title="Q3 Roadmap Sync", start=NOW + timedelta(hours=2), duration_minutes=30
+    )
+    state = _base_state(
+        messages=[
+            _proposal_message(original),
+            _withdrawal_message("Q3 Roadmap Sync"),
+            _proposal_message(reproposed),
+        ]
+    )
+
+    assert _latest_proposals(state["messages"]) == [reproposed]
 
 
 def test_collision_note_sees_a_proposal_that_survived_only_as_a_dict():

@@ -247,3 +247,16 @@ def propose_event_tool(
         title, start, duration_minutes, attendees, existing_event_id
     )
     return str(proposal), proposal
+
+
+@tool("withdraw_proposal")
+def withdraw_proposal_tool(event_id_or_title: str) -> str:
+    """Withdraw a previously made propose_event call for the same target,
+    when you decide not to go through with it after all -- e.g. declining
+    a time and asking for alternatives instead of committing to a new one.
+    Pass the same value used as existing_event_id (for an existing event)
+    or title (for a brand-new event) in the propose_event call being
+    withdrawn. Without this, the collision check keeps treating the
+    withdrawn proposal as still live even after you've moved on from it.
+    """
+    return event_id_or_title

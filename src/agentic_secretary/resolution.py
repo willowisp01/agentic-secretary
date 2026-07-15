@@ -21,21 +21,30 @@ from agentic_secretary.state import (
 SYSTEM_PROMPT = """You are an AI secretary helping a busy professional handle scheduling \
 action items detected in their calendar and inbox.
 
-You have two tools available:
+You have three tools available:
 - propose_event: propose a new calendar event time, or propose moving an existing one \
 (set existing_event_id to move an existing event; omit it to propose a brand-new event, \
 e.g. accepting a meeting request at the time it suggests).
 - draft_reply_tool: draft a reply email to the sender of an email-related action item.
+- withdraw_proposal: withdraw a previously made propose_event call for the same target, \
+when you decide not to go through with it after all.
 
-Boundaries (enforced in code, but stated here too): neither tool ever sends an email or \
-books/patches a calendar event. Every tool call only ever produces a proposal or a draft \
-for the human to review afterward -- never act as though something is final.
+Boundaries (enforced in code, but stated here too): neither propose_event nor \
+draft_reply_tool ever sends an email or books/patches a calendar event. Every tool call \
+only ever produces a proposal or a draft for the human to review afterward -- never act \
+as though something is final.
 
 Whenever a draft reply commits to a specific time (not just asking an open question like \
 "what time works?"), also call propose_event for that same time -- even if it's only \
 tentative pending the recipient's reply. The human's collision check only sees times that \
 went through propose_event; a specific time that exists only inside a drafted email's text \
 is invisible to it, so a real conflict with an existing event could go unnoticed.
+
+If you decide not to go through with a previously-proposed time after all -- e.g. declining \
+it and asking for alternatives instead of committing to a new one -- call withdraw_proposal \
+for it (pass the same existing_event_id or title you used in the original propose_event \
+call). Otherwise the collision check keeps treating that abandoned proposal as still live \
+even though you've moved on from it.
 
 Work through every action item listed below using your own judgment about which tool (if \
 either) applies. It's fine to skip an item and say why in your summary, rather than force \
@@ -115,7 +124,11 @@ def _build_context(state: PlannerState) -> str:
 
 
 def _make_bound_tools(gmail_service: Resource) -> list[BaseTool]:
-    return [tools.propose_event_tool, tools.make_draft_reply_tool(gmail_service)]
+    return [
+        tools.propose_event_tool,
+        tools.make_draft_reply_tool(gmail_service),
+        tools.withdraw_proposal_tool,
+    ]
 
 
 def make_agent_node(gmail_service: Resource) -> Callable[[PlannerState], dict]:

@@ -53,9 +53,21 @@ def _latest_proposals(messages: list[AnyMessage]) -> list[EventProposal]:
     # correction's later proposal for the same target supersedes its
     # earlier one instead of both being compared as if they were distinct
     # events -- messages accumulate across turns, they aren't replaced.
+    #
+    # Live-discovered: the agent can also decide *against* a proposal it
+    # already made (declining a time in favor of asking for alternatives)
+    # without ever calling propose_event again -- with no signal for that,
+    # the abandoned proposal stayed "the latest" forever, and the collision
+    # note kept flagging conflicts the conversation had already moved past.
+    # A withdraw_proposal call clears its key instead of replacing it;
+    # processing messages in order means a later re-proposal for the same
+    # key still correctly wins back over an earlier withdrawal.
     latest: dict[str, EventProposal] = {}
     for message in messages:
         if not isinstance(message, ToolMessage):
+            continue
+        if message.name == "withdraw_proposal":
+            latest.pop(message.content, None)
             continue
         proposal = _as_event_proposal(message.artifact)
         if proposal is None:
