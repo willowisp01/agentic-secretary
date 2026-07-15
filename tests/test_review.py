@@ -149,7 +149,21 @@ def test_review_interrupts_with_the_agents_final_summary():
 
     result = graph.invoke(_base_state(), config=config)
 
-    assert result["__interrupt__"][0].value == "All done."
+    assert result["__interrupt__"][0].value.startswith("All done.")
+
+
+def test_review_always_appends_the_propose_only_disclaimer():
+    # Live-discovered: the agent's own closing text after an "approved"
+    # reply used finality language ("your calendar is now updated") that
+    # misrepresents what actually happened. Don't trust the LLM to avoid
+    # this consistently -- attach a fixed, code-guaranteed disclaimer
+    # instead, on every review turn, not just the first.
+    graph = _build_test_graph()
+    config = {"configurable": {"thread_id": "t5"}}
+
+    result = graph.invoke(_base_state(), config=config)
+
+    assert "nothing has been booked or sent" in result["__interrupt__"][0].value
 
 
 def test_exit_phrase_ends_without_looping_back_to_agent():

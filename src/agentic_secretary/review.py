@@ -12,6 +12,20 @@ from agentic_secretary.tools import CalendarEvent, EventProposal
 # not asking the agent to do anything, so this doesn't need judgment.
 _EXIT_PHRASES = {"done", "no", "nothing else", "that's all", "bye"}
 
+# Live-discovered: the agent's own closing text after a human "approved"/
+# "ok" reply used finality language ("your calendar is now updated",
+# "drafts are ready to send") that misrepresents what actually happened --
+# propose_event/draft_reply never call insert/patch/send, so nothing was
+# actually booked or sent. Don't trust the LLM to remember this
+# consistently on every turn (the system prompt already says it once and
+# that wasn't enough); attach a fixed, code-guaranteed disclaimer instead,
+# the same "don't leave a safety-relevant fact to LLM judgment" pattern as
+# the collision note above.
+_DISCLAIMER = (
+    "(Reminder: these are proposals only -- nothing has been booked or "
+    "sent. Apply them yourself in Calendar/Gmail if you'd like to proceed.)"
+)
+
 
 def _latest_proposals(messages: list[AnyMessage]) -> list[EventProposal]:
     # Keyed by existing_event_id (or title, for brand-new events) so a
@@ -62,6 +76,7 @@ def review(state: PlannerState) -> dict:
     summary = state["messages"][-1].content
     note = _collision_note(state)
     display = summary if note is None else f"{summary}\n\n{note}"
+    display = f"{display}\n\n{_DISCLAIMER}"
     reply = interrupt(display)
     return {"messages": [HumanMessage(content=reply)]}
 
