@@ -80,8 +80,9 @@ agentic-secretary/
 │   ├── seed_data.py           # typed loader/validator for seed_data/*.yaml
 │   ├── tools.py                # thin tool wrappers: list_recent_emails,
 │   │                           #   list_upcoming_events, draft_reply, propose_event
-│   ├── state.py                # PlannerState TypedDict
-│   ├── detection.py            # ActionNeeded union + detect_actions node
+│   ├── state.py                # PlannerState TypedDict + ActionNeeded union
+│   ├── chat.py                  # greet + classify_intent nodes
+│   ├── detection.py            # detect_actions node
 │   ├── resolution.py           # agent node: system prompt + bound-tool LLM loop
 │   ├── review.py               # review node: summary interrupt + sanity annotation
 │   └── graph.py                # LangGraph wiring only: nodes + edges + compile
@@ -145,6 +146,9 @@ results), not a hand-maintained parallel list.
   state (not live APIs) and assert on graph wiring/state shape — since
   Task 8, `graph.py` is wiring only, so this file stays scoped to node/edge
   structure, not node internals.
+- `tests/test_chat.py` (Task 8): `classify_intent` against a mocked LLM
+  response — asserts routing for an in-scope ("check for conflicts") vs.
+  out-of-scope free-text turn.
 - `tests/test_detection.py` (Task 8 renames `tests/test_conflicts.py` to
   match the `detection.py` split): exercise `detect_actions` (deterministic
   overlap/back-to-back math, plus the LLM-assisted email patterns with

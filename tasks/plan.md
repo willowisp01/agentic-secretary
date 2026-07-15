@@ -407,9 +407,18 @@ unchanged — only the container type gets stricter. Also moves detection
 code out of `graph.py` into the new `detection.py` module, and introduces
 `state.py` for `PlannerState` (breaks the import cycle: `graph.py` imports
 node functions from `detection.py`/`resolution.py`/`review.py`, which each
-need `PlannerState`).
+need `PlannerState`). Since `PlannerState` itself needs `ActionNeeded` for
+its `action_items` field's type hint, `ActionNeeded` and its 4 variants
+live in `state.py` alongside `PlannerState` (not in `detection.py`, which
+would recreate the same cycle one level down) — `detection.py` imports
+both from `state.py`. Adds `messages: Annotated[list[AnyMessage],
+add_messages]` to `PlannerState` here too, even though the chat loop that
+first populates it doesn't exist until Task 8.5 — Task 8.2's `agent` node
+needs the field to exist on `PlannerState` before then.
 
 **Acceptance criteria:**
+- [ ] `ActionNeeded` and its 4 variants live in `state.py`; `PlannerState`
+      gains `action_items: list[ActionNeeded]` and `messages`
 - [ ] `ActionNeeded` is a Pydantic discriminated union with 4 variants,
       each enforcing its own field arity
 - [ ] `detect_actions` (renamed from `detect_conflicts`) returns
@@ -562,34 +571,49 @@ annotation.
 
 ---
 
-#### Task 8.5: Graph wiring + CLI
+#### Task 8.5: Chat entry + graph wiring + CLI
 
-**Description:** Assemble `build_graph`, importing node functions from
-`detection.py`/`resolution.py`/`review.py` plus LangGraph's `ToolNode` for
-`tools` — `graph.py` itself contains only imports, `add_node`/`add_edge`/
-conditional edges, checkpointer, and `compile`. `cli.py`'s final print is
-just the last `AIMessage.content` from the finished state — the same
-summary text `review` already showed the human on the last turn, not a
-second, independently-derived description of the same outcome (avoids
-reintroducing a small version of the plan/summary drift this whole
-redesign eliminated).
+**Description:** `greet`/`classify_intent` don't exist anywhere yet on
+this branch (Task 6/7 only ever built `fetch_emails → check_calendar →
+detect_conflicts`, no chat loop) — this task writes them, not just wires
+them in. `greet` is a static opening message; `classify_intent` is a small
+LLM-classified routing step (free text → "check for conflicts" routes
+onward to `fetch_emails`, anything else loops back for another turn). Real
+logic (an LLM call), so it belongs in its own module, not `graph.py`, per
+this task's own "wiring only" principle — new `chat.py`. `build_graph`
+then assembles `greet → classify_intent → fetch_emails → check_calendar →
+detect_actions → agent ⇄ tools → review ⇄ agent → END`, importing node
+functions from `chat.py`/`detection.py`/`resolution.py`/`review.py` plus
+LangGraph's `ToolNode` for `tools` — `graph.py` itself contains only
+imports, `add_node`/`add_edge`/conditional edges, checkpointer, and
+`compile`. `cli.py`'s final print is just the last `AIMessage.content`
+from the finished state — the same summary text `review` already showed
+the human on the last turn, not a second, independently-derived
+description of the same outcome (avoids reintroducing a small version of
+the plan/summary drift this whole redesign eliminated).
 
 **Acceptance criteria:**
+- [ ] `greet` and `classify_intent` exist in `chat.py` and route correctly
+      (free-text "check for conflicts"-style intent → `fetch_emails`;
+      anything else loops back for another chat turn)
 - [ ] `build_graph` wires `greet → classify_intent → fetch_emails →
       check_calendar → detect_actions → agent ⇄ tools → review ⇄ agent →
       END`
-- [ ] `graph.py` contains no detection/resolution/review logic, only
+- [ ] `graph.py` contains no chat/detection/resolution/review logic, only
       wiring
 - [ ] `cli.py` prints the last `AIMessage.content`, not a separately
       derived summary
 
 **Verification:**
+- [ ] `tests/test_chat.py` (new) — mocked LLM classification, asserts
+      routing for an in-scope vs. out-of-scope free-text turn
 - [ ] `tests/test_graph.py` asserts wiring/state shape (mocked nodes)
 
 **Dependencies:** Task 8.0, Task 8.1, Task 8.2, Task 8.3, Task 8.4
 
-**Files likely touched:** `src/agentic_secretary/graph.py`,
-`src/agentic_secretary/cli.py`
+**Files likely touched:** `src/agentic_secretary/chat.py` (new),
+`src/agentic_secretary/graph.py`, `src/agentic_secretary/cli.py`,
+`tests/test_chat.py` (new)
 
 **Estimated scope:** Medium
 
