@@ -107,12 +107,21 @@ def _make_bound_tools(gmail_service: Resource) -> list[BaseTool]:
 
 
 def make_agent_node(gmail_service: Resource) -> Callable[[PlannerState], dict]:
-    llm = ChatAnthropic(
-        model_name=settings.model_name, api_key=settings.anthropic_api_key
-    )
-    llm_with_tools = llm.bind_tools(_make_bound_tools(gmail_service))
+    # Built lazily inside agent() (matching classify_intent/_analyze_email's
+    # existing pattern elsewhere in this codebase) rather than eagerly here.
+    # ChatAnthropic's constructor validates api_key as a required string --
+    # constructing it as soon as build_graph() runs meant simply building
+    # the graph required a valid-looking key, even for tests/paths that
+    # never reach this node. Live-discovered in CI, which correctly has no
+    # ANTHROPIC_API_KEY configured (the test suite needs no live API calls).
+    bound_tools = _make_bound_tools(gmail_service)
 
     def agent(state: PlannerState) -> dict:
+        llm = ChatAnthropic(
+            model_name=settings.model_name, api_key=settings.anthropic_api_key
+        )
+        llm_with_tools = llm.bind_tools(bound_tools)
+
         messages = list(state["messages"])
         seed: list[AnyMessage] = []
         if not any(isinstance(m, SystemMessage) for m in messages):
