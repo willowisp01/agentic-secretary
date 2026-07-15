@@ -5,10 +5,12 @@ Implements [`docs/spec/ai-secretary.md`](../docs/spec/ai-secretary.md).
 ## Overview
 
 Build a LangGraph-orchestrated planner agent that reads a burner Gmail inbox
-and Google Calendar, detects scheduling time-conflicts against seeded
+and Google Calendar, detects scheduling action items against seeded
 synthetic data, and — via a chat loop rather than a fixed no-input
-pipeline — presents each conflict with a human-chosen remedy menu (shift
-slot / draft email / skip) instead of unilaterally authoring a draft. Every
+pipeline — presents each action item in an open-text turn where the human
+(or the agent, if asked to decide) composes a remedy plan — shift the slot,
+draft a reply, accept a proposed meeting, any combination of those, or
+skip — that's confirmed by the human before anything is generated. Every
 remedy stays propose-only (never auto-sends/auto-books). Claude Haiku 4.5 is
 the default model; LangSmith traces the reasoning path.
 
@@ -27,9 +29,9 @@ Config/deps (Task 1)
             │
             └── Graph skeleton (Task 6)
                     │
-                    └── Conflict-detection node (Task 7)
+                    └── Action-detection node (Task 7)
                             │
-                            └── Draft + human-review interrupt (Task 8)
+                            └── Chat remedy loop (Task 8: 8.1–8.8)
                                     │
                                     ├── LangSmith verification (Task 9)
                                     ├── Full test/lint pass (Task 10)
@@ -52,15 +54,33 @@ Config/deps (Task 1)
   comparisons are checked deterministically where possible, with the LLM
   used for the interpretive parts (e.g., reading intent out of an email).
   Reduces the risk of the LLM missing an unambiguous overlap.
-- **Chat loop, not a fixed pipeline** (decided before Task 6+, see
-  `docs/spec/ai-secretary.md`'s Conflict Response Behavior section) — the
+- **Chat loop with open-turn remedy selection, not a fixed pipeline or a
+  numbered menu** (decided before Task 6+, revised 2026-07-15 — see
+  `docs/spec/ai-secretary.md`'s Action Response Behavior section) — the
   agent greets the user and waits for free text (e.g. "check for
   conflicts") rather than running `fetch_emails → check_calendar →
-  detect_conflicts` unconditionally. After `detect_conflicts`, each
-  conflict gets a human-chosen remedy via menu (shift slot / draft email /
-  skip) instead of a bot-authored draft to approve/reject. Both menu
-  actions stay propose-only — no write-capable tool is added for milestone
-  1.
+  detect_actions` unconditionally. After `detect_actions`, each action item
+  gets an open-text turn (`present_item`) offering suggested remedies as
+  plain text rather than a forced numbered choice; an LLM (`propose_plan`)
+  turns the human's reply — including "you decide" — into a remedy
+  *subset* (multiple remedies per item are allowed, e.g. shift **and**
+  draft together) plus an optional explicit target time; a deterministic
+  (non-LLM) overlap check and human confirmation (`confirm_plan`) happen
+  *before* any generation, not after. All remedies stay propose-only — no
+  write-capable tool is added for milestone 1. Revised from the original
+  fixed-menu design after live testing showed it couldn't express "shift
+  AND draft" for one item, and silently produced duplicate, contradictory
+  Gmail drafts when a single email conflicted with two calendar events (see
+  Task 8.1).
+- **`EmailConflict` is multi-event** — an email's proposed meeting can
+  overlap more than one existing calendar event (e.g. a proposed 9:15am
+  slot overlapping both a 9:00 standup and a 9:15 client call);
+  `EmailConflict` carries `events: list[CalendarEvent]`, matching
+  `CalendarOverlapConflict`/`BackToBackConflict`'s existing list-of-events
+  shape, instead of one `EmailConflict` per overlapping event. Confirmed
+  necessary by a live CLI run producing two separate, contradictory Gmail
+  drafts on the same email thread under the earlier singular-`event`
+  design.
 
 ## Task List
 
@@ -90,13 +110,22 @@ Config/deps (Task 1)
 
 - [x] Task 6: PlannerState + graph skeleton
 - [x] Task 7: Conflict-detection node
-- [ ] Task 8: Draft-response node + human-review interrupt
+- [ ] Task 8: Chat remedy loop (open-turn + confirm-before-generate)
+  - [ ] Task 8.1: `EmailConflict` becomes multi-event
+  - [ ] Task 8.2: State shape for the open-turn remedy flow
+  - [ ] Task 8.3: `present_item` node (open-text turn)
+  - [ ] Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
+  - [ ] Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
+  - [ ] Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
+  - [ ] Task 8.7: Graph wiring + CLI display
+  - [ ] Task 8.8: Spec + plan documentation update
 
 ### Checkpoint: Core Agent Flow
 - [ ] End-to-end CLI run against the seeded account: greet → free-text
-      "check for conflicts" → fetch → detect seeded conflicts → pause at
-      remedy menu per conflict
-- [ ] All conflict-pattern tests pass against fixtures
+      "check for conflicts" → fetch → detect action items → open-text
+      remedy turn per item, confirmed before generation
+- [ ] All conflict-pattern tests pass against fixtures, including the
+      multi-event `EmailConflict` case (one email overlapping two events)
 - [ ] Review with human before observability/polish phase
 
 ### Phase 4: Observability and Polish
@@ -313,8 +342,7 @@ possible and an LLM call (Haiku) for the interpretive parts (e.g.,
 extracting a requested meeting time from free-text email content). The node
 itself is unchanged by the chat-loop decision — it still takes
 `emails`/`calendar_events` and returns `conflicts`; only Task 8 changes how
-it's triggered (from a chat turn) and what happens with its output (a menu,
-not an auto-draft).
+it's triggered (from a chat turn) and what happens with its output.
 
 **Acceptance criteria:**
 - [x] Given the seeded fixture data, `detect_conflicts` identifies at least
@@ -348,64 +376,324 @@ conformance. A `model_validator` additionally zeroes fields whose paired
 boolean is false, since live probing showed the model can still attach a
 real, valid event id to an email that references no event at all. `pydantic`
 was added as an explicit dependency (previously only transitive via
-`langchain`/`langgraph`). Future LLM-calling nodes (e.g. Task 8's draft
-generation) should follow this same pattern.
+`langchain`/`langgraph`). LLM-calling nodes added in Task 8 follow this same
+pattern.
+
+**Amendment (Task 8.1):** `_find_email_actions`'s original implementation
+appended one `EmailConflict` per overlapping calendar event, discovered via
+live testing to produce duplicate/contradictory Gmail drafts when one email
+overlapped two events. See Task 8.1 below — `EmailConflict` is now
+multi-event (`events: list[...]`), grouped per email.
 
 ---
 
-### Task 8: Chat loop + conflict remedy menu
+### Task 8.1: `EmailConflict` becomes multi-event
 
-**Description:** Add the chat entry point: a `greet` node that opens with a
-greeting, then a turn that accepts free-text human input (e.g. "check for
-conflicts") and routes to `detect_conflicts` (Task 7). For each conflict
-found, an interrupt presents a menu — shift slot / draft email / skip — per
-`docs/spec/ai-secretary.md`'s Conflict Response Behavior. The chosen remedy
-calls `propose_event` (shift) or `draft_reply` (draft email), or makes no
-tool call (skip), and the outcome is appended to `state["resolutions"]`.
-Milestone 1 stops at the proposal — no send/create ever happens, regardless
-of which menu option is chosen.
+**Description:** Fixes a live-confirmed bug: `_find_email_actions`
+currently appends one `EmailConflict` per calendar event a proposed meeting
+overlaps (a `for event in calendar_events` loop inside the
+`proposes_new_meeting` branch), so a single email overlapping two events
+produces two independent `EmailConflict` items. A live CLI run against the
+seeded fixtures ("Quick sync tomorrow?" overlapping both "Team Standup" and
+"Client Sync") confirmed this produces two separate, contradictory Gmail
+drafts on the same email thread once both got resolved via `draft_reply`.
+`EmailConflict.event: CalendarEvent` (singular) becomes
+`events: list[CalendarEvent]`, matching the list-of-events shape
+`CalendarOverlapConflict`/`BackToBackConflict` already use;
+`_find_email_actions` collects all overlapping events for an email before
+appending a single `EmailConflict`.
 
 **Acceptance criteria:**
-- [ ] Running the CLI opens a chat prompt; a check-for-conflicts message
-      runs detection and pauses at a remedy-menu interrupt for each
-      detected conflict
-- [ ] Choosing "shift slot" or "draft email" produces the corresponding
-      proposal object and appends a resolution to `state["resolutions"]`;
-      choosing "skip" appends a resolution with no tool call
-- [ ] No tool call that would send an email or create/patch a calendar
-      event exists anywhere in this phase's code path
+- [ ] `EmailConflict` has an `events: list[tools.CalendarEvent]` field, not
+      `event`
+- [ ] An email whose proposed meeting overlaps two or more calendar events
+      produces exactly one `EmailConflict` action item listing all of them,
+      not one item per overlap
+- [ ] `_event_by_id`'s multi-event `isinstance` check includes
+      `EmailConflict` alongside `CalendarOverlapConflict | BackToBackConflict`
 
 **Verification:**
-- [ ] Manual CLI run demonstrating greeting → free-text input → conflict →
-      menu → proposal, for at least one conflict pattern
-- [ ] `tests/test_graph.py` asserts the graph halts at the menu interrupt
-      without a chosen remedy, and asserts each menu branch's resulting
-      state shape
+- [ ] `tests/test_actions.py` gains a case with two overlapping calendar
+      events against one proposed-meeting email, asserting exactly one
+      `EmailConflict` with `len(events) == 2`
+- [ ] Existing `EmailConflict`-related tests updated for the field rename;
+      `uv run pytest` passes
 
-**Dependencies:** Task 7
+**Dependencies:** None (amends Task 7's already-shipped code)
+
+**Files likely touched:** `src/agentic_secretary/graph.py`,
+`tests/test_actions.py`
+
+**Estimated scope:** Small
+
+---
+
+### Task 8.2: State shape for the open-turn remedy flow
+
+**Description:** Replace `PlannerState`'s `pending_resolution:
+ActionResolution | None` with the fields the new multi-remedy queue needs:
+`pending_remedies: list[RemedyLiteral]`, `pending_shift_event_ids:
+list[str]`, `pending_explicit_time: datetime | None`,
+`pending_plan_summary: str`. Extend the remedy `Literal` type (shared by
+`ActionResolution.remedy` and the new fields) with `"accept_meeting"`.
+Extend `_applicable_remedies` so `EmailConflict` returns `{shift_slot,
+draft_reply, accept_meeting, skip}` — the other three kinds are unchanged
+(`CalendarOverlapConflict`/`BackToBackConflict`: `{shift_slot, skip}`;
+`RescheduleRequest`: `{shift_slot, draft_reply, skip}`) since only an
+`EmailConflict` carries a proposed new meeting to accept.
+
+**Acceptance criteria:**
+- [ ] `PlannerState.__annotations__` reflects the new fields, no
+      `pending_resolution`
+- [ ] `_applicable_remedies` returns the correct remedy set per
+      `ActionNeeded` kind, including `accept_meeting` for `EmailConflict`
+      only
+
+**Verification:**
+- [ ] Update `test_planner_state_has_expected_fields` for the new field set
+- [ ] New `tests/test_graph.py` cases for `_applicable_remedies` per kind
+
+**Dependencies:** Task 8.1
+
+**Files likely touched:** `src/agentic_secretary/graph.py`,
+`tests/test_graph.py`
+
+**Estimated scope:** Small
+
+---
+
+### Task 8.3: `present_item` node (open-text turn)
+
+**Description:** Replaces `present_menu`'s forced numbered-choice
+`interrupt()` (and its second conditional "which event to shift"
+sub-interrupt) with an open turn: shows the action item's description and
+its applicable remedies as plain human-readable text (not a numbered list),
+and accepts a free-text reply (e.g. "shift and draft", "you decide", "shift
+it to 3pm"). This node does no interpretation — it only displays the item
+and captures the raw reply for `propose_plan`. Unconditional edge to
+`propose_plan`.
+
+**Acceptance criteria:**
+- [ ] Interrupting on an action item shows its description and the
+      applicable remedies as text, not a numbered menu
+- [ ] The free-text reply is captured into state for `propose_plan` to read
+- [ ] `present_item` performs no remedy interpretation itself (no branching
+      on the reply's content)
+
+**Verification:**
+- [ ] `tests/test_graph.py` case asserting the interrupt payload contains
+      the item description and remedy labels (including "accept the
+      meeting" only when the item is an `EmailConflict`)
+
+**Dependencies:** Task 8.2
+
+**Files likely touched:** `src/agentic_secretary/graph.py`,
+`tests/test_graph.py`
+
+**Estimated scope:** Small
+
+---
+
+### Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
+
+**Description:** New LLM node, following the existing structured-output
+pattern (`_EmailIntent`/`_ChatIntent`/`_ShiftProposal`/`_ReplyDraft`, all
+`with_structured_output(Model, method="json_schema")`). A new
+`_ProposedPlan` model captures: `remedies: list[RemedyLiteral]` (the chosen
+subset — multi-remedy allowed), `shift_event_ids: list[str]` (which of the
+item's event(s) to shift, when `shift_slot` is chosen), `explicit_time:
+datetime | None` (a specific time named in the free text, if any),
+`summary: str` (plain-text plan description for `confirm_plan` to show).
+The prompt gets the item's description, its applicable remedies, and the
+human's free-text reply (including a "decide for me" case). The LLM's
+`remedies` output is deterministically validated against
+`_applicable_remedies(item)` afterward — anything not actually applicable
+is stripped, never trusted blindly.
+
+Disambiguation default differs by kind: `CalendarOverlapConflict`/
+`BackToBackConflict` are exactly-2-arity pairwise conflicts where shifting
+resolves the overlap by moving either one — if the reply doesn't name one,
+default to the first event and let `confirm_plan`'s summary make the choice
+visible for correction. `EmailConflict` can have more than two events; if
+`shift_slot` is chosen and the reply doesn't disambiguate, default to *all*
+of the item's events (moving every conflicting event out of the way is what
+"shift to make room" means when several things are in the way). Unconditional
+edge to `confirm_plan`.
+
+**Acceptance criteria:**
+- [ ] A reply naming multiple remedies (e.g. "shift and draft") produces
+      both in `pending_remedies`
+- [ ] "You decide" produces a plan chosen from the item's applicable
+      remedies
+- [ ] A reply naming a specific time populates `pending_explicit_time`
+- [ ] `remedies` is filtered against `_applicable_remedies(item)` before
+      being stored — an LLM response naming an inapplicable remedy never
+      reaches `pending_remedies`
+- [ ] `shift_event_ids` defaults per kind as described above when the reply
+      doesn't disambiguate
+
+**Verification:**
+- [ ] `tests/test_graph.py` cases mocking the LLM call (same `@patch`
+      pattern as `_classify_intent`/`_analyze_email`) for: multi-remedy
+      reply, "you decide", explicit-time extraction, and the
+      invalid-remedy-filtered-out case
+
+**Dependencies:** Task 8.3
+
+**Files likely touched:** `src/agentic_secretary/graph.py`,
+`tests/test_graph.py`
+
+**Estimated scope:** Medium — split `shift_event_ids` disambiguation into a
+follow-up task if the prompt/validation logic and test matrix grow past a
+single focused session
+
+---
+
+### Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
+
+**Description:** Displays `pending_plan_summary` via `interrupt()`. If
+`pending_explicit_time` is set, deterministically (no LLM call) checks it
+against `state["calendar_events"]` and any shift proposals already in
+`state["resolutions"]` this session, reusing the same overlap comparison
+`_find_calendar_overlaps`/`_busy_times_context` already use, and appends a
+plain f-string warning to the displayed summary if it overlaps — advisory
+only, never blocking. The human's reply either confirms (routes to
+`content_generation`) or rejects/edits (clears all `pending_*` fields,
+routes back to `present_item` to re-show the same item).
+
+**Acceptance criteria:**
+- [ ] A plan with no explicit time, or an explicit time that doesn't
+      overlap anything, shows no warning
+- [ ] A plan with an explicit time that overlaps a known event or an
+      already-proposed shift shows a warning but can still be confirmed
+- [ ] Rejecting/editing clears `pending_*` state and re-enters
+      `present_item` for the same item (not the next one)
+
+**Verification:**
+- [ ] `tests/test_graph.py` cases for: no-warning path,
+      warning-shown-but-confirmed path, rejected-plan-loops-back path
+
+**Dependencies:** Task 8.4
+
+**Files likely touched:** `src/agentic_secretary/graph.py`,
+`tests/test_graph.py`
+
+**Estimated scope:** Small
+
+---
+
+#### Sub-checkpoint: Interaction path (Tasks 8.1–8.5)
+- [ ] `uv run pytest` passes for all of `test_actions.py`/`test_graph.py`
+- [ ] A full round-trip (`present_item` → `propose_plan` → `confirm_plan`)
+      is exercisable via `graph.invoke`/`Command(resume=...)`, even though
+      `content_generation` doesn't yet consume the new queue shape —
+      acceptable at this checkpoint since Task 8.6 finishes the wiring
+- [ ] Review with human before generation logic
+
+---
+
+### Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
+
+**Description:** Currently handles exactly one remedy per call, reading
+`state["pending_resolution"]`. Rewritten to pop one remedy at a time off
+`state["pending_remedies"]`: `shift_slot` uses the existing
+`_generate_shift_proposal`, iterating `pending_shift_event_ids` (one
+`ActionResolution` per shifted event, since `ActionResolution` is already
+shaped around a single `proposal`); `draft_reply` uses the existing
+`_generate_reply_body`/`tools.draft_reply`, unchanged; `accept_meeting` is
+new — calls `tools.propose_event(title=item.email.subject,
+start=item.proposed_start, duration_minutes=item.proposed_duration_minutes,
+existing_event_id=None)` directly, no LLM call, only reachable for
+`EmailConflict` items; `skip` is the existing no-op short-circuit,
+unchanged. Loops back to itself while `pending_remedies` is non-empty (same
+item); once empty, advances `pending_action_index`, clears all `pending_*`
+fields, and routes to `present_item` (more items remain) or `END`
+(exhausted).
+
+**Acceptance criteria:**
+- [ ] A plan with `[shift_slot, draft_reply]` produces two resolutions for
+      the same action item
+- [ ] `shift_slot` on an `EmailConflict` with multiple `shift_event_ids`
+      produces one resolution per shifted event
+- [ ] `accept_meeting` produces an `EventProposal` with
+      `existing_event_id=None`, using the email's already-known
+      `proposed_start`/`proposed_duration_minutes`, and makes no LLM call
+- [ ] `skip` still makes no LLM or tool call
+
+**Verification:**
+- [ ] `tests/test_graph.py` cases: multi-remedy queue produces multiple
+      resolutions; `accept_meeting` resolution asserted via
+      `tools.propose_event` call args plus an LLM-call mock's
+      `assert_not_called()`; queue-exhaustion routing (mirrors the existing
+      `test_content_generation_advances_to_end_when_action_items_exhausted`)
+
+**Dependencies:** Task 8.5
+
+**Files likely touched:** `src/agentic_secretary/graph.py`,
+`tests/test_graph.py`
+
+**Estimated scope:** Medium
+
+---
+
+### Task 8.7: Graph wiring + CLI display
+
+**Description:** `build_graph`: remove `present_menu`'s node/edges; add
+`present_item`, `propose_plan`, `confirm_plan`; update
+`content_generation`'s conditional edges for the new
+self-loop-on-nonempty-queue / `present_item` / `END` routing. `cli.py`:
+extend its remedy-label display mapping (mirroring `_REMEDY_LABELS` in
+`graph.py`) to include `accept_meeting` so resolutions display correctly.
+
+**Acceptance criteria:**
+- [ ] `uv run python -m agentic_secretary.cli` runs the full open-turn flow
+      end-to-end against the seeded burner account, including the
+      multi-event `EmailConflict` scenario (Alex's email vs. Standup +
+      Client Sync)
+- [ ] Choosing `accept_meeting` on that scenario proposes Alex's meeting as
+      a new calendar entry (not just clearing space)
+- [ ] No duplicate/contradictory Gmail drafts are created on the same email
+      thread
+
+**Verification:**
+- [ ] Full `uv run pytest` passes
+- [ ] Manual CLI run against seeded data confirming the three acceptance
+      criteria above
+
+**Dependencies:** Task 8.6
 
 **Files likely touched:** `src/agentic_secretary/graph.py`,
 `src/agentic_secretary/cli.py`
 
-**Estimated scope:** Medium
+**Estimated scope:** Small
 
-**Consideration — relative-date arithmetic for "shift the slot":** live testing
-during Task 7 showed `_analyze_email`'s LLM call miscomputing a relative-day
-reference (an email asking to move a meeting to "Thursday" got resolved to
-the wrong date, off by one day), even though the event and reschedule intent
-were identified correctly. Task 7's `reschedule` pattern doesn't need the
-target date (it only needs to know a reschedule was requested and which
-event), so this hasn't affected Task 7. It will matter here once "shift the
-slot" needs an actual new time to pass to `propose_event(...)`. Two mitigations
-to consider when implementing: (1) give the LLM the anchor date's weekday
-name explicitly in the prompt rather than making it infer/compute one, and
-(2) prefer having the LLM extract a symbolic target (e.g. a weekday name or
-"same time as original") and resolve it to an absolute datetime with
-deterministic Python code, consistent with this plan's "deterministic +
-LLM-assisted" architecture decision, rather than trusting the LLM's own date
-arithmetic. Either way, the human-review interrupt in this task's own design
-is the backstop — a wrong proposed time still requires human confirmation
-before anything is booked.
+---
+
+### Task 8.8: Spec + plan documentation update
+
+**Description:** Rewrite `docs/spec/ai-secretary.md`'s "Action Response
+Behavior" section to describe the open-turn + confirm-before-generate flow
+(superseding the fixed-menu description), and update "Success Criteria" to
+match (open text instead of "menu of remedies", confirm-before-generate,
+multi-remedy, `accept_meeting`). Record the three deferred items below in
+the spec's Open Questions.
+
+**Acceptance criteria:**
+- [ ] Spec accurately describes the shipped behavior; no stale references
+      to a numbered menu remain
+- [ ] Deferred items (shared-event-linking, no-thread-to-reply-to for pure
+      calendar conflicts, the 10-event fetch window bound) are recorded as
+      open/deferred, not silently dropped
+
+**Verification:**
+- [ ] Manual read-through of the spec against the actual `graph.py`
+      behavior
+
+**Dependencies:** Task 8.7
+
+**Files likely touched:** `docs/spec/ai-secretary.md`
+
+**Estimated scope:** Small
 
 ---
 
@@ -480,14 +768,38 @@ the synthetic-data disclosure note from the intent doc.
 | LLM conflict-detection misses an ambiguous fixture wording | Medium | Keep seed data scenarios explicit and unambiguous (Task 3 acceptance criteria); back deterministic time-overlap checks with code, not just LLM judgment |
 | LangGraph interrupt/human-in-the-loop API unfamiliarity | Low-Medium | Prototype the interrupt pattern early in Task 8; consult LangGraph docs via `source-driven-development` if behavior doesn't match expectations |
 | Scope creep toward RAG/multi-persona mid-implementation | Low | Explicitly out of scope per `docs/spec/ai-secretary.md` boundaries; flag and defer if tempted mid-task |
+| `propose_plan`'s LLM-based remedy/disambiguation interpretation misreads free text | Medium | `remedies` deterministically filtered against `_applicable_remedies` before use (Task 8.4); `confirm_plan`'s human gate (Task 8.5) catches a wrong interpretation before any generation happens |
+| Multi-event `shift_slot` on an `EmailConflict` moves more events than the human intended | Low-Medium | Per-kind default documented in Task 8.4; `confirm_plan`'s summary always lists which events are being shifted before confirmation |
 
 ## Open Questions
 
-None outstanding for this plan. Resolved 2026-07-13: milestone 1 moved from
-a fixed no-input pipeline to a chat loop, with conflict response as a
-human-chosen remedy menu rather than a bot-authored draft (see Architecture
-Decisions above and `docs/spec/ai-secretary.md`'s Conflict Response
-Behavior section). Note: Tasks 2, 5, 8 (manual check), and 9
-depend on you completing Google Cloud OAuth client setup and having burner
-account access ready — these are prerequisites outside what can be automated
-and should be confirmed before implementation begins.
+Resolved 2026-07-13: milestone 1 moved from a fixed no-input pipeline to a
+chat loop. Resolved 2026-07-15: action response moved again, from a fixed
+numbered remedy menu to an open-text turn with LLM-interpreted,
+human-confirmed multi-remedy plans (see Architecture Decisions above and
+`docs/spec/ai-secretary.md`'s Action Response Behavior section) — live
+testing found the fixed-menu design couldn't express "shift AND draft" and
+silently produced duplicate, contradictory Gmail drafts when one email
+conflicted with two calendar events.
+
+Deferred, not blocking Task 8:
+- **Shared-event-linking across different `ActionNeeded` kinds** — e.g. a
+  `BackToBackConflict` pair where one event is also independently named in
+  a `RescheduleRequest`. Cheap to add later (thread sibling-item context
+  into `propose_plan`'s prompt, no schema change needed) — not scheduled.
+- **No way to originate a fresh email for a pure calendar-calendar
+  conflict** — `CalendarOverlapConflict`/`BackToBackConflict` have no
+  attached email/thread, and `tools.draft_reply` requires an existing
+  `thread_id` (reply-only, not fresh-compose). Good to have, not needed for
+  milestone 1.
+- **`confirm_plan`'s overlap check is bounded by the 10-event fetch
+  window** — `state["calendar_events"]` comes from one
+  `list_upcoming_events(max_results=10)` call at session start and is never
+  refreshed; a target date beyond that window would pass the check with
+  false confidence on a busier calendar. Good to have, not needed for this
+  demo's scale.
+
+Note: Tasks 2, 5, 8 (manual check), and 9 depend on you completing Google
+Cloud OAuth client setup and having burner account access ready — these are
+prerequisites outside what can be automated and should be confirmed before
+implementation begins.
