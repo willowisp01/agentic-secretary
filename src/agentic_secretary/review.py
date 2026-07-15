@@ -4,7 +4,7 @@ from langchain_core.messages import AnyMessage, HumanMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.types import interrupt
 
-from agentic_secretary.detection import _find_calendar_overlaps
+from agentic_secretary.detection import _find_back_to_back, _find_calendar_overlaps
 from agentic_secretary.state import PlannerState
 from agentic_secretary.tools import CalendarEvent, EventProposal
 
@@ -54,9 +54,14 @@ def _as_calendar_event(proposal: EventProposal) -> CalendarEvent:
 
 def _collision_note(state: PlannerState) -> str | None:
     """Advisory-only, computed after the tool calls already ran -- not a
-    gate. Reuses the existing overlap math (_find_calendar_overlaps)
-    against the proposed times plus whichever original calendar events
-    weren't themselves just moved, rather than reimplementing "overlap".
+    gate. Reuses the existing overlap/back-to-back math
+    (_find_calendar_overlaps, _find_back_to_back) against the proposed
+    times plus whichever original calendar events weren't themselves just
+    moved, rather than reimplementing either check. Live-discovered gap:
+    checking overlaps alone missed a real zero-buffer back-to-back the
+    agent introduced itself (one proposal's start landing exactly on
+    another event's end) -- adjacent times don't overlap by the strict
+    definition, so they need their own check.
     """
     proposals = _latest_proposals(state["messages"])
     if not proposals:
@@ -66,10 +71,11 @@ def _collision_note(state: PlannerState) -> str | None:
     moved_ids = {e.id for e in proposed_events}
     untouched_events = [e for e in state["calendar_events"] if e.id not in moved_ids]
 
-    overlaps = _find_calendar_overlaps(proposed_events + untouched_events)
-    if not overlaps:
+    combined = proposed_events + untouched_events
+    collisions = _find_calendar_overlaps(combined) + _find_back_to_back(combined)
+    if not collisions:
         return None
-    return "Note: " + "; ".join(o.description for o in overlaps)
+    return "Note: " + "; ".join(c.description for c in collisions)
 
 
 def review(state: PlannerState) -> dict:

@@ -56,6 +56,24 @@ def test_collision_note_flags_two_proposals_that_overlap():
     assert "Team Standup" in note
 
 
+def test_collision_note_flags_two_proposals_that_are_back_to_back_with_no_buffer():
+    # Live-discovered gap: overlap-checking alone missed a real zero-buffer
+    # adjacency the agent introduced itself -- one proposal's start landing
+    # exactly on another's end doesn't count as an "overlap" by the strict
+    # definition, but it's still worth flagging the same way.
+    first = EventProposal(title="Design Review", start=NOW, duration_minutes=45)
+    second = EventProposal(
+        title="Quick Sync", start=NOW + timedelta(minutes=45), duration_minutes=30
+    )
+    state = _base_state(messages=[_proposal_message(first), _proposal_message(second)])
+
+    note = _collision_note(state)
+
+    assert note is not None
+    assert "Design Review" in note
+    assert "Quick Sync" in note
+
+
 def test_collision_note_flags_a_proposal_against_an_untouched_calendar_event():
     existing = CalendarEvent(
         id="e1", title="Lunch", start=NOW, end=NOW + timedelta(minutes=60)
