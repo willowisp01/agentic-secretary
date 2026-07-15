@@ -474,6 +474,33 @@ def _route_after_present_menu(state: PlannerState) -> str:
     return "content_generation" if state["pending_resolution"] is not None else "present_menu"
 
 
+def _present_item_text(item: ActionNeeded) -> str:
+    # Suggested remedies as plain text, not a forced numbered menu -- the
+    # human (or "you decide") can name any combination in free text, which
+    # propose_plan (Task 8.4) interprets. Reuses _applicable_remedies/
+    # _REMEDY_LABELS so the suggestion set always matches what
+    # content_generation can actually act on.
+    remedies = _applicable_remedies(item)
+    labels = ", ".join(_REMEDY_LABELS[r] for r in remedies)
+    return (
+        f"[{item.kind}] {item.description}\n"
+        f"Possible remedies: {labels}.\n"
+        'What would you like to do? (name one or more remedies, or say "you decide")'
+    )
+
+
+def present_item(state: PlannerState) -> dict:
+    # Replaces present_menu's forced numbered choice with an open turn --
+    # this node only displays the item and captures the raw reply;
+    # propose_plan (Task 8.4) does the interpretation. Not yet wired into
+    # build_graph -- Task 8.7 does the actual node swap, once
+    # propose_plan/confirm_plan/content_generation are ready to consume
+    # what this node produces.
+    item = state["action_items"][state["pending_action_index"]]
+    reply = interrupt(_present_item_text(item))
+    return {"messages": [HumanMessage(content=reply)]}
+
+
 def _event_by_id(item: ActionNeeded, event_id: str) -> tools.CalendarEvent:
     if isinstance(item, CalendarOverlapConflict | BackToBackConflict | EmailConflict):
         return next(e for e in item.events if e.id == event_id)

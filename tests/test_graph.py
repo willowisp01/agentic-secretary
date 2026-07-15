@@ -14,6 +14,7 @@ from agentic_secretary.graph import (
     _applicable_remedies,
     _ChatIntent,
     _EmailIntent,
+    _present_item_text,
     build_graph,
     greet,
 )
@@ -198,6 +199,67 @@ def test_action_resolution_holds_skip_remedy_with_no_proposal():
     assert resolution.remedy == "skip"
     assert resolution.proposal is None
     assert resolution.shift_event_id is None
+
+
+def test_present_item_text_shows_description_and_suggested_remedies():
+    standup = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
+    )
+    client_sync = CalendarEvent(
+        id="e2",
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    item = CalendarOverlapConflict(
+        description="'Team Standup' overlaps with 'Client Sync'",
+        events=[standup, client_sync],
+    )
+
+    text = _present_item_text(item)
+
+    assert "'Team Standup' overlaps with 'Client Sync'" in text
+    assert "Shift the slot" in text
+    assert "Skip" in text
+    # calendar_overlap has no email at all -- draft/accept must not appear.
+    assert "Draft a reply" not in text
+    assert "Accept the meeting" not in text
+
+
+def test_present_item_text_offers_accept_meeting_for_email_conflict():
+    event = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
+    )
+    email = EmailSummary(
+        id="m1",
+        thread_id="t1",
+        from_="alex@example.com",
+        to="you@example.com",
+        subject="Quick sync tomorrow?",
+        body="Are you free tomorrow?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    item = EmailConflict(
+        description="'Quick sync tomorrow?' requests a time overlapping 'Team Standup'",
+        events=[event],
+        email=email,
+        proposed_start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+
+    text = _present_item_text(item)
+
+    assert "Shift the slot" in text
+    assert "Draft a reply" in text
+    assert "Accept the meeting" in text
+    assert "Skip" in text
+    assert "you decide" in text
 
 
 def test_greet_emits_an_ai_message():
