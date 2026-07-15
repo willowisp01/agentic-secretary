@@ -522,7 +522,12 @@ def test_route_after_confirm_plan_goes_to_present_item_when_remedies_empty():
 
 
 def _generation_state(
-    item, pending_remedies, pending_shift_event_ids=None, resolutions=None, pending_explicit_time=None
+    item,
+    pending_remedies,
+    pending_shift_event_ids=None,
+    resolutions=None,
+    pending_explicit_time=None,
+    pending_plan_summary="",
 ):
     return {
         "action_items": [item],
@@ -530,6 +535,7 @@ def _generation_state(
         "pending_remedies": pending_remedies,
         "pending_shift_event_ids": pending_shift_event_ids or [],
         "pending_explicit_time": pending_explicit_time,
+        "pending_plan_summary": pending_plan_summary,
         "calendar_events": OVERLAPPING_EVENTS,
         "resolutions": resolutions or [],
     }
@@ -598,6 +604,37 @@ def test_run_content_generation_skip_makes_no_llm_or_tool_call():
     mock_reply.assert_not_called()
     mock_propose_event.assert_not_called()
     mock_draft_reply.assert_not_called()
+
+
+@patch("agentic_secretary.graph._generate_reply_body")
+def test_run_content_generation_draft_reply_passes_the_plan_summary(mock_reply_body):
+    # Live-discovered gap: _generate_reply_body used to only see the
+    # original email, never what the human actually asked for this turn
+    # (e.g. "ask if they can push it to Friday") -- drafted replies agreed
+    # to the sender's original ask instead of reflecting the confirmed plan.
+    mock_reply_body.return_value = "Sure, Thursday works!"
+    email = EmailSummary(
+        id="m1",
+        thread_id="thread-1",
+        from_="priya@example.com",
+        to="you@example.com",
+        subject="Re: Client Sync -- need to move",
+        body="Can we push this to Thursday, same time?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    item = RescheduleRequest(description="reschedule", event=OVERLAPPING_EVENTS[1], email=email)
+    state = _generation_state(
+        item, ["draft_reply"], pending_plan_summary="I'll ask if they can push it to Friday."
+    )
+    gmail_service = MagicMock(name="gmail_service")
+    gmail_service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+        "id": "d1",
+        "message": {"threadId": "thread-1"},
+    }
+
+    _run_content_generation(gmail_service, state)
+
+    mock_reply_body.assert_called_once_with(item, "I'll ask if they can push it to Friday.")
 
 
 @patch("agentic_secretary.graph._generate_reply_body")

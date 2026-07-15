@@ -478,13 +478,17 @@ class _ProposedPlan(BaseModel):
     needs_clarification: bool = Field(
         default=False,
         description="True only if an essential detail of the plan can't be "
-        "determined even with a reasonable default -- most commonly, the "
-        "item has two candidate events and the reply doesn't indicate which "
-        "one to shift. When true, remedies/shift_event_ids/explicit_time/"
-        "summary are ignored; only clarifying_question is used. Do not set "
-        "this just because the reply is terse (e.g. \"shift\" for an item "
-        "with only one candidate event, or \"you decide\", are NOT "
-        "ambiguous -- a sensible default applies).",
+        "determined even with a reasonable default -- this applies ONLY to "
+        "a calendar_overlap or back_to_back item (exactly two candidate "
+        "events, no sensible default for which one) when the reply chooses "
+        "shift_slot without indicating which event. When true, remedies/"
+        "shift_event_ids/explicit_time/summary are ignored; only "
+        "clarifying_question is used. Do not set this for an email_conflict "
+        "item -- it can have several candidate events, and shifting all of "
+        "them to make room is already the sensible default, not an "
+        "ambiguity. Do not set this just because the reply is terse (e.g. "
+        "\"shift\" for an item with only one candidate event, or \"you "
+        "decide\", are NOT ambiguous -- a sensible default applies).",
     )
     clarifying_question: str = Field(
         default="",
@@ -565,10 +569,14 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
         f"set explicit_time -- don't leave it null just because the reference "
         f"isn't a bare clock time. If the reply mentions a time with no "
         f"explicit UTC offset, assume it's in {DEMO_TIMEZONE}.\n\n"
-        "If choosing shift_slot but the item has more than one candidate "
-        "event and the reply doesn't indicate which one, don't guess -- set "
+        "If this is a calendar_overlap or back_to_back item, it has exactly "
+        "two candidate events -- if shift_slot is chosen and the reply "
+        "doesn't indicate which one, don't guess -- set "
         "needs_clarification=true and ask which event in "
-        "clarifying_question instead."
+        "clarifying_question instead. This does not apply to email_conflict: "
+        "if it has several candidate events and the reply doesn't "
+        "disambiguate, that means shift all of them to make room, which is "
+        "not ambiguous."
     )
     return structured_llm.invoke(prompt)
 
@@ -777,12 +785,15 @@ class _ReplyDraft(BaseModel):
     body: str = Field(description="Body text for the reply email.")
 
 
-def _generate_reply_body(item: EmailConflict | RescheduleRequest) -> str:
+def _generate_reply_body(item: EmailConflict | RescheduleRequest, plan_summary: str) -> str:
     prompt = (
         "Draft a brief, professional reply to this email.\n\n"
         f"Original subject: {item.email.subject}\n"
         f"Original body:\n{item.email.body}\n\n"
-        f"Context: {item.description}"
+        f"Context: {item.description}\n\n"
+        f"What the human has already decided to tell the sender: {plan_summary}\n\n"
+        "The reply must reflect this decision -- don't improvise a different "
+        "response based only on the original email above."
     )
     llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
     structured_llm = llm.with_structured_output(_ReplyDraft, method="json_schema")
@@ -880,7 +891,7 @@ def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dic
         return _finish_remedy(state, resolution, rest_remedies)
 
     if remedy == "draft_reply":
-        body = _generate_reply_body(item)
+        body = _generate_reply_body(item, state["pending_plan_summary"])
         original_subject = item.email.subject
         subject = (
             original_subject
