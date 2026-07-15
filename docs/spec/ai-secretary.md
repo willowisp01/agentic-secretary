@@ -19,16 +19,15 @@ synthetic emails and calendar events (see Seed Data below).
 **Success looks like:** running the CLI against the seeded burner account
 opens a chat session — the agent greets the user, the user replies with
 free text (e.g. "check for conflicts"), and the agent (a) fetches the day's
-schedule and inbox, (b) identifies at least one real time conflict between
-a calendar event and an incoming meeting-request email, and (c) presents
-each action item in an open-text turn where the human (or the agent, if
-asked to decide) composes a remedy plan — shift the slot, draft a reply,
-accept a proposed meeting, any combination of those, or skip — that's
-confirmed by the human before anything is generated, rather than
-unilaterally authoring one draft to approve or reject. Chosen remedies stay
-propose-only (a Gmail draft or a structured event proposal); actually
-sending the email or booking the slot is deferred to a later milestone. The
-full reasoning trace is visible in LangSmith.
+schedule and inbox, (b) identifies at least one real action item — a time
+conflict or a meeting-request/reschedule email — and (c) resolves what it
+can on its own judgment using bound tools (propose a new event time, or
+draft a reply), then presents one summary of what it did for the human to
+review and correct — rather than gating each individual decision behind a
+pre-approval menu. Every resolution stays propose-only (a Gmail draft or a
+structured event proposal); actually sending the email or booking the slot
+is deferred to a later milestone. The full reasoning trace is visible in
+LangSmith.
 
 ## Tech Stack
 
@@ -81,7 +80,12 @@ agentic-secretary/
 │   ├── seed_data.py           # typed loader/validator for seed_data/*.yaml
 │   ├── tools.py                # thin tool wrappers: list_recent_emails,
 │   │                           #   list_upcoming_events, draft_reply, propose_event
-│   └── graph.py                # LangGraph graph: PlannerState + nodes + edges
+│   ├── state.py                # PlannerState TypedDict + ActionNeeded union
+│   ├── chat.py                  # greet + classify_intent nodes
+│   ├── detection.py            # detect_actions node
+│   ├── resolution.py           # agent node: system prompt + bound-tool LLM loop
+│   ├── review.py               # review node: summary interrupt + sanity annotation
+│   └── graph.py                # LangGraph wiring only: nodes + edges + compile
 ├── tests/                     # one test module per src/scripts module above
 └── docs/
     ├── intent/ai-secretary.md
@@ -89,8 +93,15 @@ agentic-secretary/
 ```
 
 Node/tool files stay single-file (not split into subpackages) while the node
-count is small (~9). Revisit this once RAG (milestone 2) adds enough new
-tools/nodes to justify splitting.
+count is small. Task 8 splits what was a single `graph.py` (types +
+detection + resolution + wiring) into `state.py`/`detection.py`/
+`resolution.py`/`review.py`/`graph.py` along node boundaries, once the node
+count reached six (`fetch_emails`, `check_calendar`, `detect_actions`,
+`agent`, `tools`, `review`) and `graph.py` was heading toward also holding
+the system prompt and the tool-calling/review-interrupt logic on top of
+detection — sooner than the originally-anticipated "revisit at milestone 2"
+point, but for the same underlying reason (file size/readability), not a
+scope change.
 
 ## Code Style
 
@@ -100,18 +111,11 @@ tools/nodes to justify splitting.
 
 ```python
 class PlannerState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]  # chat turns: greeting,
-                                                           # human input, free-text replies
+    messages: Annotated[list[AnyMessage], add_messages]  # chat turns + the
+                                                           # agent's own tool-calling history
     emails: list[EmailSummary]
     calendar_events: list[CalendarEvent]
     action_items: list[ActionNeeded]
-    pending_action_index: int          # which action item is awaiting a remedy turn
-    pending_remedies: list[RemedyLiteral]       # remedies queued for the current item
-    pending_shift_event_ids: list[str]          # event id(s) to shift, when queued
-    pending_explicit_time: datetime | None      # a specific time named in the reply, if any
-    pending_plan_summary: str                   # plan text shown by confirm_plan
-    resolutions: Annotated[list[ActionResolution], operator.add]  # chosen
-                                                           # remedy per action item
 
 def check_calendar(state: PlannerState) -> dict:
     events = tools.list_upcoming_events(calendar_service)
@@ -119,15 +123,14 @@ def check_calendar(state: PlannerState) -> dict:
 ```
 
 Nodes return a partial dict of only the keys they update — not a full-state
-spread — so each field's reducer (default: replace; `add_messages`/
-`operator.add`: append) decides how it merges. `PlannerState` grows
-incrementally with the graph: the Task 6 skeleton (`fetch_emails →
-check_calendar`) only needs `emails`/`calendar_events`/`status`; `messages`,
-`action_items`, and `pending_action_index` are added once action detection
-exists (Task 7); the `pending_remedies`/`pending_shift_event_ids`/
-`pending_explicit_time`/`pending_plan_summary` queue fields and
-`resolutions` are added once the open-turn remedy nodes that use them exist
-(Task 8).
+spread — so each field's reducer (default: replace; `add_messages`:
+append) decides how it merges. `PlannerState` grows incrementally with the
+graph: the Task 6 skeleton (`fetch_emails → check_calendar`) only needs
+`emails`/`calendar_events`/`status`; `messages` and `action_items` are added
+once the chat loop and the detection/resolution nodes that use them exist
+(Task 7/8). There's no separate `resolutions` field or per-item pending
+index — what the agent did lives in `messages` (its own tool calls and
+results), not a hand-maintained parallel list.
 
 - Tools are thin wrappers around the Google API clients — no business logic
   in the tool layer; reasoning belongs in graph nodes / prompts.
@@ -140,14 +143,28 @@ exists (Task 7); the `pending_remedies`/`pending_shift_event_ids`/
 - `tests/test_tools.py`: mock the Google API clients (no live network calls
   in unit tests) — verify tool functions parse/shape data correctly.
 - `tests/test_graph.py`: run the compiled LangGraph app against fixture
-  state (not live APIs) and assert on graph wiring/state shape.
-- `tests/test_actions.py`: exercise `detect_actions` (deterministic
+  state (not live APIs) and assert on graph wiring/state shape — since
+  Task 8, `graph.py` is wiring only, so this file stays scoped to node/edge
+  structure, not node internals.
+- `tests/test_chat.py` (Task 8): `classify_intent` against a mocked LLM
+  response — asserts routing for an in-scope ("check for conflicts") vs.
+  out-of-scope free-text turn.
+- `tests/test_detection.py` (Task 8 renames `tests/test_conflicts.py` to
+  match the `detection.py` split): exercise `detect_actions` (deterministic
   overlap/back-to-back math, plus the LLM-assisted email patterns with
   `_analyze_email` mocked — no live Anthropic calls in the automated suite,
   same "no live API calls" rule as the Google clients) against fixture data
   loaded from the real `seed_data/*.yaml`, not hand-duplicated lookalikes.
+- `tests/test_resolution.py` (Task 8): the `agent`/`tools` loop against a
+  mocked `ChatAnthropic.bind_tools(...)` response — assert the right tool
+  is called with the right (id-bearing) args, and that the loop terminates
+  once the mocked response stops returning tool calls.
+- `tests/test_review.py` (Task 8): deterministic tests only — the
+  exit-vs-continue routing on a fixed set of reply phrases, and the
+  collision-annotation helper against synthetic overlapping/non-overlapping
+  `EventProposal` fixtures. No LLM involved in this file.
 - No coverage percentage target for a portfolio project of this size;
-  prioritize covering the action-detection logic and tool-parsing edges
+  prioritize covering the conflict-detection logic and tool-parsing edges
   over exhaustive coverage.
 - Live-API smoke testing (actually hitting the burner Gmail/Calendar) is
   manual, via `uv run python -m agentic_secretary.cli` against seeded data —
@@ -167,55 +184,39 @@ exists (Task 7); the `pending_remedies`/`pending_shift_event_ids`/
   `credentials.json`; auto-send emails or auto-book events without a human
   approval step; deploy this publicly/hosted (local-only per intent doc).
 
-## Action Response Behavior
-
-The calendar is the source of truth: every `ActionNeeded` item is anchored
-to at least one `CalendarEvent`, and an email is only ever checked against
-the calendar, never against another email. Action detection has no
-email-vs-email case for this reason (see the `ActionNeeded` shape in
-Architecture above). `EmailConflict` is multi-event: a single proposed
-meeting can overlap more than one existing calendar event, in which case
-one `EmailConflict` lists all of them, rather than one item per overlap
-(the latter was tried first and found, via live testing, to produce
-duplicate/contradictory Gmail drafts when each overlap was resolved
-independently).
+## Action Resolution Behavior
 
 Milestone 1 does not prescribe per-pattern draft content (i.e. no fixed
 template like "for a calendar-calendar overlap, always draft X"). Instead,
-once `detect_actions` finds an action item, the agent presents it in an
-open-text chat turn — suggested remedies shown as plain text, not a forced
-numbered menu — and the human replies freely (naming one remedy, several at
-once, or "you decide" to delegate the choice). An LLM turns that reply into
-a structured plan — which remedy or remedies, possibly more than one for
-the same item, any specific time named, and a plain-text summary — which is
-then shown back to the human for explicit confirmation *before* anything is
-generated. Only after confirmation does the agent actually call a tool:
+once `detect_actions` finds action items, the agent resolves all of them in
+one autonomous pass, using its own judgment about which tool applies to
+which item, before presenting a single summary:
 
-1. **Shift the slot** — calls `propose_event(...)`, producing a structured
-   `EventProposal`. Never calls Calendar's `insert`/`patch`.
-2. **Draft a reply email** — calls `draft_reply(...)`, producing a Gmail
-   draft via `drafts.create`. Never calls `send`.
-3. **Accept the meeting** — `EmailConflict` items only (the ones with a
-   proposed *new* meeting to accept). Calls `propose_event(...)` using the
-   time/duration already extracted from the email during detection, no new
-   LLM reasoning needed. Never calls `insert`.
-4. **Skip** — no tool call; the action item is left unresolved for this run.
+- **`propose_event(...)`** — used both to shift an existing event
+  (`existing_event_id` set) and to accept a meeting request as a new event
+  (`existing_event_id` omitted). Produces a structured `EventProposal`.
+  Never calls Calendar's `insert`/`patch`.
+- **`draft_reply(...)`** — produces a Gmail draft via `drafts.create`. Never
+  calls `send`.
+- **Skip** — the agent simply doesn't call a tool for that item, and says so
+  in its summary if there's a reason worth surfacing.
 
-Multiple remedies can be chosen together for one action item (e.g. shift
-the slot *and* draft a reply) — each produces its own resolution. The
-confirmation step includes a deterministic (non-LLM) check: if the plan
-pins an explicit time, it's compared against known calendar events and any
-shifts already proposed this session, and a warning is shown if it
-overlaps — advisory only, the human can still confirm anyway. Rejecting the
-plan re-shows the same item for another reply rather than moving on.
+Tool calls execute immediately as the agent decides to make them — there is
+no pre-execution approval gate, because both tools are already propose-only
+by construction (see Boundaries). The human reviews the *result*, not each
+individual decision: once the agent has acted on everything it can, it
+presents one summary, and the human can request corrections
+conversationally (e.g. "move Client Sync to 2pm instead"). The agent
+retains full memory of what it already did, so a correction is resolved
+against its own prior tool call rather than treated as an unrelated new
+request. If the agent is genuinely unsure how to handle an item, it asks
+directly instead of guessing, in that same summary-and-reply turn.
 
-The human's confirmed plan determines the action; the agent does not
-unilaterally author and present a single draft for approve/reject. All four
-remedies are propose-only, matching the tool-layer boundary already
-enforced in `tools.py` — no write-capable tool (`patch`/`update`/`send`) is
-in scope for milestone 1. Actually applying a slot shift, booking a new
-meeting, or sending a drafted email is deferred to a later milestone, gated
-behind its own human-in-the-loop confirmation.
+This is a deliberate change from an earlier "human picks a remedy from a
+fixed menu per conflict" design (see Open Questions): that design gated
+every decision behind pre-approval, which added interaction friction
+without adding real safety — the propose-only tool boundary is already the
+actual safety guarantee, not the human's pre-approval step.
 
 ## Success Criteria
 
@@ -225,17 +226,18 @@ behind its own human-in-the-loop confirmation.
 - [ ] `uv run python -m agentic_secretary.cli` opens a chat session against
       the seeded account: the agent greets the user, the user asks it to
       check for conflicts, the agent fetches emails/calendar, detects the
-      seeded conflicts, and for each presents an open-text remedy turn
-      (shift slot / draft email / accept meeting / skip, any combination),
-      confirmed by the human before generation, per the Action Response
-      Behavior above.
-- [ ] No action (send/create) happens without an explicit human
-      confirmation in the chat flow, and even a confirmed remedy only ever
-      produces a proposal (draft or structured event), never a
-      send/insert/patch call.
+      seeded action items, and resolves them autonomously (proposing event
+      shifts/new events or drafting replies as appropriate) before
+      presenting one summary for review, per the Action Resolution Behavior
+      above.
+- [ ] No tool the agent calls ever sends an email or creates/patches a
+      calendar event — every resolution only ever produces a proposal
+      (draft or structured event, never a send/insert/patch call) — and the
+      human reviews the full set of resolutions each run before ending the
+      session.
 - [ ] A LangSmith trace exists for the run and shows the node-by-node
       reasoning path.
-- [ ] `uv run pytest` passes, covering tool-parsing and action-detection
+- [ ] `uv run pytest` passes, covering tool-parsing and conflict-detection
       logic against fixture data (no live API calls in the test suite).
 
 ## Seed Data — Conflict Patterns (Milestone 1 scope: time conflicts only)
@@ -255,32 +257,13 @@ client vs. internal meeting importance) are out of scope for milestone 1.
 
 ## Open Questions
 
-Resolved: lint/format tool is Ruff; LangGraph checkpointer is in-memory for
-milestone 1 (resets each CLI run — revisit if a later demo wants to show
-resuming a paused/interrupted session); milestone 1 entry point is a chat
-loop rather than a fixed no-input pipeline. Resolved 2026-07-15: action
-response moved from a fixed numbered remedy menu to an open-text turn with
-LLM-interpreted, human-confirmed multi-remedy plans (see Action Response
-Behavior above) — live testing found the fixed-menu design couldn't
-express "shift AND draft" for one item, and silently produced duplicate,
-contradictory Gmail drafts when one email conflicted with two calendar
-events. Resolved 2026-07-15: shared-event-linking across different
-`ActionNeeded` kinds — live testing confirmed the same calendar event
-(Client Sync) got shifted to two contradictory times by two independently-
-detected action items in one session. `confirm_plan` now deterministically
-surfaces prior same-session resolutions that touch the same event as an
-advisory note (`_related_resolutions`/`_related_resolution_note`), and
-`propose_plan` feeds the same context into its own prompt so the plan
-itself can account for it rather than just contradicting it.
-
-Deferred, not blocking milestone 1:
-- **No way to originate a fresh email for a pure calendar-calendar
-  conflict** — those items have no attached email/thread, and `draft_reply`
-  requires an existing `thread_id` (reply-only, not fresh-compose). Good to
-  have, not needed for milestone 1.
-- **The deterministic overlap check in the confirmation step is bounded by
-  the calendar fetch window** — `calendar_events` comes from one
-  `list_upcoming_events(max_results=10)` call at session start and is never
-  refreshed; a target date beyond that window would pass the check with
-  false confidence on a busier calendar. Good to have, not needed for this
-  demo's scale.
+None outstanding. Resolved: lint/format tool is Ruff; LangGraph checkpointer
+is in-memory for milestone 1 (resets each CLI run — revisit if a later demo
+wants to show resuming a paused/interrupted session); milestone 1 entry
+point is a chat loop rather than a fixed no-input pipeline. Action
+resolution was originally spec'd as a human-chosen remedy via menu per
+conflict; revised 2026-07-15 to autonomous-resolution-with-review (see
+Action Resolution Behavior above) after Task 8 prototyping showed the
+menu's per-decision pre-approval gate added interaction friction without
+adding real safety beyond what the propose-only tool boundary already
+guarantees.

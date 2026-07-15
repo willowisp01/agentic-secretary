@@ -1,9 +1,11 @@
 import base64
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
 from googleapiclient.discovery import Resource
+from langchain_core.tools import BaseTool, tool
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,36 @@ def draft_reply(
     return DraftResult(draft_id=result["id"], thread_id=result["message"]["threadId"])
 
 
+def make_draft_reply_tool(service: Resource) -> BaseTool:
+    """Bind `draft_reply` to a specific Gmail service instance as a
+    callable LangChain tool. `service` is a runtime dependency the LLM
+    can't supply (it isn't JSON-schema-able), so it's captured via closure
+    rather than exposed as a tool argument.
+    """
+    # LangGraph's ToolNode executes multiple tool calls from one AIMessage
+    # concurrently via a thread pool -- e.g. the agent drafting replies to
+    # two different emails in the same turn. googleapiclient's Resource
+    # objects aren't thread-safe (live-discovered: concurrent draft_reply
+    # calls sharing one service instance corrupted the TLS connection --
+    # "SSL: WRONG_VERSION_NUMBER"). Serialize actual calls through this
+    # service instance rather than relying on ToolNode to run sequentially.
+    lock = threading.Lock()
+
+    @tool
+    def draft_reply_tool(
+        to: str, subject: str, body: str, thread_id: str
+    ) -> DraftResult:
+        """Draft a reply email to the sender of an email-related action
+        item — e.g. proposing a different time, or acknowledging a
+        reschedule. Never sends; only prepares a Gmail draft for human
+        review.
+        """
+        with lock:
+            return draft_reply(service, to, subject, body, thread_id)
+
+    return draft_reply_tool
+
+
 def propose_event(
     title: str,
     start: datetime,
@@ -173,7 +205,14 @@ def propose_event(
     attendees: list[str] | None = None,
     existing_event_id: str | None = None,
 ) -> EventProposal:
-    """Build a structured event proposal. Never calls Calendar's insert/patch."""
+    """Propose a calendar event time. Never calls Calendar's insert/patch —
+    only builds a structured proposal for human review.
+
+    Omit `existing_event_id` to propose a brand-new event — e.g. accepting
+    a meeting request from an email at the time it suggests. Set
+    `existing_event_id` to the id of an event already on the calendar to
+    propose moving that event to a new start/duration instead.
+    """
     return EventProposal(
         title=title,
         start=start,
@@ -181,3 +220,30 @@ def propose_event(
         attendees=attendees,
         existing_event_id=existing_event_id,
     )
+
+
+@tool("propose_event", response_format="content_and_artifact")
+def propose_event_tool(
+    title: str,
+    start: datetime,
+    duration_minutes: int,
+    attendees: list[str] | None = None,
+    existing_event_id: str | None = None,
+) -> tuple[str, EventProposal]:
+    """Propose a calendar event time. Never calls Calendar's insert/patch —
+    only builds a structured proposal for human review.
+
+    Omit `existing_event_id` to propose a brand-new event — e.g. accepting
+    a meeting request from an email at the time it suggests. Set
+    `existing_event_id` to the id of an event already on the calendar to
+    propose moving that event to a new start/duration instead.
+    """
+    # response_format="content_and_artifact" keeps the real EventProposal
+    # attached to the resulting ToolMessage as .artifact, not just its str()
+    # in .content -- callers that need the structured value (e.g. the
+    # deterministic collision check in review.py) don't have to re-parse a
+    # repr string to get it back.
+    proposal = propose_event(
+        title, start, duration_minutes, attendees, existing_event_id
+    )
+    return str(proposal), proposal

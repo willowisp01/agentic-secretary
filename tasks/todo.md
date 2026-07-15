@@ -21,20 +21,19 @@ against mocks (no live calls in the test suite).
 ## Phase 3: Agent Reasoning
 - [x] Task 6: PlannerState + graph skeleton
 - [x] Task 7: Conflict-detection node
-- [x] Task 8: Chat remedy loop (open-turn + confirm-before-generate)
-  - [x] Task 8.1: `EmailConflict` becomes multi-event
-  - [x] Task 8.2: State shape for the open-turn remedy flow
-  - [x] Task 8.3: `present_item` node (open-text turn)
-  - [x] Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
-  - [x] Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
-  - [x] Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
-  - [x] Task 8.7: Graph wiring + CLI display
-  - [x] Task 8.8: Spec + plan documentation update
+- [ ] Task 8: Autonomous resolution + review interrupt
+  - [x] Task 8.0: Detection-layer typing foundation (`ActionNeeded` union)
+  - [x] Task 8.1: `@tool`-annotate `propose_event`/`draft_reply`
+  - [x] Task 8.2: `agent` + `tools` loop
+  - [x] Task 8.3: `review` node (interrupt + routing)
+  - [x] Task 8.4: Deterministic collision annotation
+  - [x] Task 8.5: Graph wiring + CLI
+  - [x] Task 8.6: System prompt
+  - [ ] Task 8.7: Live verification (manual — needs you)
 
-**Checkpoint:** end-to-end CLI run detects seeded action items, walks the
-open-text remedy turn through to a confirmed, generated resolution;
-conflict-pattern tests pass, including the multi-event `EmailConflict`
-case.
+**Checkpoint:** end-to-end CLI run detects seeded action items, resolves
+them autonomously (proposals/drafts as appropriate), presents one review
+summary; conflict-pattern tests pass.
 
 ## Phase 4: Observability and Polish
 - [ ] Task 9: LangSmith tracing verification

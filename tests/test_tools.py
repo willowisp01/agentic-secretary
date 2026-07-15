@@ -1,4 +1,6 @@
 import base64
+import threading
+import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -10,7 +12,9 @@ from agentic_secretary.tools import (
     draft_reply,
     list_recent_emails,
     list_upcoming_events,
+    make_draft_reply_tool,
     propose_event,
+    propose_event_tool,
 )
 
 
@@ -187,3 +191,91 @@ def test_propose_event_returns_proposal_without_touching_calendar_api():
     )
     service.events.return_value.insert.assert_not_called()
     service.events.return_value.patch.assert_not_called()
+
+
+def test_propose_event_tool_exposes_name_and_description_for_binding():
+    assert propose_event_tool.name == "propose_event"
+    assert "existing_event_id" in propose_event_tool.description
+
+    start = datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc)
+    message = propose_event_tool.invoke(
+        {
+            "name": "propose_event",
+            "args": {"title": "Client Sync", "start": start, "duration_minutes": 45},
+            "id": "call_1",
+            "type": "tool_call",
+        }
+    )
+
+    # response_format="content_and_artifact": .content is a display string,
+    # .artifact is the real EventProposal (what the collision check in
+    # review.py needs, without re-parsing a repr string).
+    assert message.artifact == EventProposal(
+        title="Client Sync", start=start, duration_minutes=45
+    )
+
+
+def test_draft_reply_tool_binds_to_the_given_service_instance():
+    service = MagicMock()
+    service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+        "id": "draft1",
+        "message": {"id": "m2", "threadId": "t1"},
+    }
+    draft_reply_tool = make_draft_reply_tool(service)
+
+    assert draft_reply_tool.name == "draft_reply_tool"
+    assert draft_reply_tool.description
+
+
+def test_draft_reply_tool_serializes_concurrent_calls():
+    # Live-discovered bug: LangGraph's ToolNode runs multiple tool calls
+    # from one AIMessage concurrently via a thread pool (e.g. the agent
+    # drafting replies to two different emails in the same turn).
+    # googleapiclient's Resource objects aren't thread-safe -- concurrent
+    # calls sharing one service instance corrupted the real TLS connection
+    # ("SSL: WRONG_VERSION_NUMBER"). This proves the tool's internal lock
+    # actually serializes execution rather than letting them interleave.
+    call_log: list[tuple[str, int]] = []
+    service = MagicMock()
+
+    def slow_execute():
+        call_log.append(("start", threading.get_ident()))
+        time.sleep(0.05)
+        call_log.append(("end", threading.get_ident()))
+        return {"id": "draft1", "message": {"id": "m2", "threadId": "t1"}}
+
+    service.users.return_value.drafts.return_value.create.return_value.execute.side_effect = (
+        slow_execute
+    )
+    draft_reply_tool = make_draft_reply_tool(service)
+
+    def call() -> None:
+        draft_reply_tool.invoke(
+            {"to": "a@example.com", "subject": "s", "body": "b", "thread_id": "t1"}
+        )
+
+    threads = [threading.Thread(target=call) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(call_log) == 6
+    # If serialized, each "start" is immediately followed by its own
+    # "end" (same thread) before any other thread's "start" appears --
+    # never two "start"s back to back.
+    for i in range(0, len(call_log), 2):
+        assert call_log[i][0] == "start"
+        assert call_log[i + 1] == ("end", call_log[i][1])
+
+    result = draft_reply_tool.invoke(
+        {
+            "to": "alex@example.com",
+            "subject": "Re: Quick sync tomorrow?",
+            "body": "Sure, 9:15 works.",
+            "thread_id": "t1",
+        }
+    )
+
+    assert result == DraftResult(draft_id="draft1", thread_id="t1")
+    service.users.return_value.messages.return_value.send.assert_not_called()
