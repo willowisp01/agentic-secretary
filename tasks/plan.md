@@ -110,21 +110,24 @@ Config/deps (Task 1)
 
 - [x] Task 6: PlannerState + graph skeleton
 - [x] Task 7: Conflict-detection node
-- [ ] Task 8: Chat remedy loop (open-turn + confirm-before-generate)
-  - [ ] Task 8.1: `EmailConflict` becomes multi-event
-  - [ ] Task 8.2: State shape for the open-turn remedy flow
-  - [ ] Task 8.3: `present_item` node (open-text turn)
-  - [ ] Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
-  - [ ] Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
-  - [ ] Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
-  - [ ] Task 8.7: Graph wiring + CLI display
-  - [ ] Task 8.8: Spec + plan documentation update
+- [x] Task 8: Chat remedy loop (open-turn + confirm-before-generate)
+  - [x] Task 8.1: `EmailConflict` becomes multi-event
+  - [x] Task 8.2: State shape for the open-turn remedy flow
+  - [x] Task 8.3: `present_item` node (open-text turn)
+  - [x] Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
+  - [x] Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
+  - [x] Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
+  - [x] Task 8.7: Graph wiring + CLI display
+  - [x] Task 8.8: Spec + plan documentation update
 
 ### Checkpoint: Core Agent Flow
-- [ ] End-to-end CLI run against the seeded account: greet → free-text
+- [x] End-to-end CLI run against the seeded account: greet → free-text
       "check for conflicts" → fetch → detect action items → open-text
-      remedy turn per item, confirmed before generation
-- [ ] All conflict-pattern tests pass against fixtures, including the
+      remedy turn per item, confirmed before generation (verified live
+      2026-07-15: Alex's email overlapping two events detected as one
+      action item, a multi-remedy reply produced two resolutions for it,
+      accept_meeting proposed a genuinely new calendar entry)
+- [x] All conflict-pattern tests pass against fixtures, including the
       multi-event `EmailConflict` case (one email overlapping two events)
 - [ ] Review with human before observability/polish phase
 
@@ -404,19 +407,19 @@ drafts on the same email thread once both got resolved via `draft_reply`.
 appending a single `EmailConflict`.
 
 **Acceptance criteria:**
-- [ ] `EmailConflict` has an `events: list[tools.CalendarEvent]` field, not
+- [x] `EmailConflict` has an `events: list[tools.CalendarEvent]` field, not
       `event`
-- [ ] An email whose proposed meeting overlaps two or more calendar events
+- [x] An email whose proposed meeting overlaps two or more calendar events
       produces exactly one `EmailConflict` action item listing all of them,
       not one item per overlap
-- [ ] `_event_by_id`'s multi-event `isinstance` check includes
+- [x] `_event_by_id`'s multi-event `isinstance` check includes
       `EmailConflict` alongside `CalendarOverlapConflict | BackToBackConflict`
 
 **Verification:**
-- [ ] `tests/test_actions.py` gains a case with two overlapping calendar
+- [x] `tests/test_actions.py` gains a case with two overlapping calendar
       events against one proposed-meeting email, asserting exactly one
       `EmailConflict` with `len(events) == 2`
-- [ ] Existing `EmailConflict`-related tests updated for the field rename;
+- [x] Existing `EmailConflict`-related tests updated for the field rename;
       `uv run pytest` passes
 
 **Dependencies:** None (amends Task 7's already-shipped code)
@@ -443,15 +446,15 @@ draft_reply, accept_meeting, skip}` — the other three kinds are unchanged
 `EmailConflict` carries a proposed new meeting to accept.
 
 **Acceptance criteria:**
-- [ ] `PlannerState.__annotations__` reflects the new fields, no
+- [x] `PlannerState.__annotations__` reflects the new fields, no
       `pending_resolution`
-- [ ] `_applicable_remedies` returns the correct remedy set per
+- [x] `_applicable_remedies` returns the correct remedy set per
       `ActionNeeded` kind, including `accept_meeting` for `EmailConflict`
       only
 
 **Verification:**
-- [ ] Update `test_planner_state_has_expected_fields` for the new field set
-- [ ] New `tests/test_graph.py` cases for `_applicable_remedies` per kind
+- [x] Update `test_planner_state_has_expected_fields` for the new field set
+- [x] New `tests/test_graph.py` cases for `_applicable_remedies` per kind
 
 **Dependencies:** Task 8.1
 
@@ -474,14 +477,14 @@ and captures the raw reply for `propose_plan`. Unconditional edge to
 `propose_plan`.
 
 **Acceptance criteria:**
-- [ ] Interrupting on an action item shows its description and the
+- [x] Interrupting on an action item shows its description and the
       applicable remedies as text, not a numbered menu
-- [ ] The free-text reply is captured into state for `propose_plan` to read
-- [ ] `present_item` performs no remedy interpretation itself (no branching
+- [x] The free-text reply is captured into state for `propose_plan` to read
+- [x] `present_item` performs no remedy interpretation itself (no branching
       on the reply's content)
 
 **Verification:**
-- [ ] `tests/test_graph.py` case asserting the interrupt payload contains
+- [x] `tests/test_graph.py` case asserting the interrupt payload contains
       the item description and remedy labels (including "accept the
       meeting" only when the item is an `EmailConflict`)
 
@@ -521,19 +524,19 @@ of the item's events (moving every conflicting event out of the way is what
 edge to `confirm_plan`.
 
 **Acceptance criteria:**
-- [ ] A reply naming multiple remedies (e.g. "shift and draft") produces
+- [x] A reply naming multiple remedies (e.g. "shift and draft") produces
       both in `pending_remedies`
-- [ ] "You decide" produces a plan chosen from the item's applicable
+- [x] "You decide" produces a plan chosen from the item's applicable
       remedies
-- [ ] A reply naming a specific time populates `pending_explicit_time`
-- [ ] `remedies` is filtered against `_applicable_remedies(item)` before
+- [x] A reply naming a specific time populates `pending_explicit_time`
+- [x] `remedies` is filtered against `_applicable_remedies(item)` before
       being stored — an LLM response naming an inapplicable remedy never
       reaches `pending_remedies`
-- [ ] `shift_event_ids` defaults per kind as described above when the reply
+- [x] `shift_event_ids` defaults per kind as described above when the reply
       doesn't disambiguate
 
 **Verification:**
-- [ ] `tests/test_graph.py` cases mocking the LLM call (same `@patch`
+- [x] `tests/test_graph.py` cases mocking the LLM call (same `@patch`
       pattern as `_classify_intent`/`_analyze_email`) for: multi-remedy
       reply, "you decide", explicit-time extraction, and the
       invalid-remedy-filtered-out case
@@ -562,15 +565,15 @@ only, never blocking. The human's reply either confirms (routes to
 routes back to `present_item` to re-show the same item).
 
 **Acceptance criteria:**
-- [ ] A plan with no explicit time, or an explicit time that doesn't
+- [x] A plan with no explicit time, or an explicit time that doesn't
       overlap anything, shows no warning
-- [ ] A plan with an explicit time that overlaps a known event or an
+- [x] A plan with an explicit time that overlaps a known event or an
       already-proposed shift shows a warning but can still be confirmed
-- [ ] Rejecting/editing clears `pending_*` state and re-enters
+- [x] Rejecting/editing clears `pending_*` state and re-enters
       `present_item` for the same item (not the next one)
 
 **Verification:**
-- [ ] `tests/test_graph.py` cases for: no-warning path,
+- [x] `tests/test_graph.py` cases for: no-warning path,
       warning-shown-but-confirmed path, rejected-plan-loops-back path
 
 **Dependencies:** Task 8.4
@@ -583,12 +586,12 @@ routes back to `present_item` to re-show the same item).
 ---
 
 #### Sub-checkpoint: Interaction path (Tasks 8.1–8.5)
-- [ ] `uv run pytest` passes for all of `test_actions.py`/`test_graph.py`
-- [ ] A full round-trip (`present_item` → `propose_plan` → `confirm_plan`)
+- [x] `uv run pytest` passes for all of `test_actions.py`/`test_graph.py`
+- [x] A full round-trip (`present_item` → `propose_plan` → `confirm_plan`)
       is exercisable via `graph.invoke`/`Command(resume=...)`, even though
       `content_generation` doesn't yet consume the new queue shape —
       acceptable at this checkpoint since Task 8.6 finishes the wiring
-- [ ] Review with human before generation logic
+- [x] Review with human before generation logic
 
 ---
 
@@ -611,17 +614,17 @@ fields, and routes to `present_item` (more items remain) or `END`
 (exhausted).
 
 **Acceptance criteria:**
-- [ ] A plan with `[shift_slot, draft_reply]` produces two resolutions for
+- [x] A plan with `[shift_slot, draft_reply]` produces two resolutions for
       the same action item
-- [ ] `shift_slot` on an `EmailConflict` with multiple `shift_event_ids`
+- [x] `shift_slot` on an `EmailConflict` with multiple `shift_event_ids`
       produces one resolution per shifted event
-- [ ] `accept_meeting` produces an `EventProposal` with
+- [x] `accept_meeting` produces an `EventProposal` with
       `existing_event_id=None`, using the email's already-known
       `proposed_start`/`proposed_duration_minutes`, and makes no LLM call
-- [ ] `skip` still makes no LLM or tool call
+- [x] `skip` still makes no LLM or tool call
 
 **Verification:**
-- [ ] `tests/test_graph.py` cases: multi-remedy queue produces multiple
+- [x] `tests/test_graph.py` cases: multi-remedy queue produces multiple
       resolutions; `accept_meeting` resolution asserted via
       `tools.propose_event` call args plus an LLM-call mock's
       `assert_not_called()`; queue-exhaustion routing (mirrors the existing
@@ -646,18 +649,18 @@ extend its remedy-label display mapping (mirroring `_REMEDY_LABELS` in
 `graph.py`) to include `accept_meeting` so resolutions display correctly.
 
 **Acceptance criteria:**
-- [ ] `uv run python -m agentic_secretary.cli` runs the full open-turn flow
+- [x] `uv run python -m agentic_secretary.cli` runs the full open-turn flow
       end-to-end against the seeded burner account, including the
       multi-event `EmailConflict` scenario (Alex's email vs. Standup +
       Client Sync)
-- [ ] Choosing `accept_meeting` on that scenario proposes Alex's meeting as
+- [x] Choosing `accept_meeting` on that scenario proposes Alex's meeting as
       a new calendar entry (not just clearing space)
-- [ ] No duplicate/contradictory Gmail drafts are created on the same email
+- [x] No duplicate/contradictory Gmail drafts are created on the same email
       thread
 
 **Verification:**
-- [ ] Full `uv run pytest` passes
-- [ ] Manual CLI run against seeded data confirming the three acceptance
+- [x] Full `uv run pytest` passes
+- [x] Manual CLI run against seeded data confirming the three acceptance
       criteria above
 
 **Dependencies:** Task 8.6
@@ -679,14 +682,14 @@ multi-remedy, `accept_meeting`). Record the three deferred items below in
 the spec's Open Questions.
 
 **Acceptance criteria:**
-- [ ] Spec accurately describes the shipped behavior; no stale references
+- [x] Spec accurately describes the shipped behavior; no stale references
       to a numbered menu remain
-- [ ] Deferred items (shared-event-linking, no-thread-to-reply-to for pure
+- [x] Deferred items (shared-event-linking, no-thread-to-reply-to for pure
       calendar conflicts, the 10-event fetch window bound) are recorded as
       open/deferred, not silently dropped
 
 **Verification:**
-- [ ] Manual read-through of the spec against the actual `graph.py`
+- [x] Manual read-through of the spec against the actual `graph.py`
       behavior
 
 **Dependencies:** Task 8.7

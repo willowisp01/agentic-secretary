@@ -21,15 +21,15 @@ against mocks (no live calls in the test suite).
 ## Phase 3: Agent Reasoning
 - [x] Task 6: PlannerState + graph skeleton
 - [x] Task 7: Conflict-detection node
-- [ ] Task 8: Chat remedy loop (open-turn + confirm-before-generate)
-  - [ ] Task 8.1: `EmailConflict` becomes multi-event
-  - [ ] Task 8.2: State shape for the open-turn remedy flow
-  - [ ] Task 8.3: `present_item` node (open-text turn)
-  - [ ] Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
-  - [ ] Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
-  - [ ] Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
-  - [ ] Task 8.7: Graph wiring + CLI display
-  - [ ] Task 8.8: Spec + plan documentation update
+- [x] Task 8: Chat remedy loop (open-turn + confirm-before-generate)
+  - [x] Task 8.1: `EmailConflict` becomes multi-event
+  - [x] Task 8.2: State shape for the open-turn remedy flow
+  - [x] Task 8.3: `present_item` node (open-text turn)
+  - [x] Task 8.4: `propose_plan` node (LLM plan + multi-remedy)
+  - [x] Task 8.5: `confirm_plan` node (deterministic overlap warning + confirmation gate)
+  - [x] Task 8.6: `content_generation` rewrite (queue processing + `accept_meeting`)
+  - [x] Task 8.7: Graph wiring + CLI display
+  - [x] Task 8.8: Spec + plan documentation update
 
 **Checkpoint:** end-to-end CLI run detects seeded action items, walks the
 open-text remedy turn through to a confirmed, generated resolution;
