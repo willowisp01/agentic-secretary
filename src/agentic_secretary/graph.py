@@ -501,6 +501,113 @@ def present_item(state: PlannerState) -> dict:
     return {"messages": [HumanMessage(content=reply)]}
 
 
+def _item_events(item: ActionNeeded) -> list[tools.CalendarEvent]:
+    # Uniform "give me every candidate event on this item" view across
+    # kinds -- CalendarOverlapConflict/BackToBackConflict/EmailConflict
+    # carry a list, RescheduleRequest carries exactly one.
+    if isinstance(item, CalendarOverlapConflict | BackToBackConflict | EmailConflict):
+        return item.events
+    return [item.event]
+
+
+class _ProposedPlan(BaseModel):
+    remedies: list[RemedyLiteral] = Field(
+        description="The chosen remedy or remedies for this action item, from "
+        "the applicable remedies listed. Multiple remedies may be chosen "
+        "together (e.g. shift_slot and draft_reply) when the reply asks for "
+        "more than one action."
+    )
+    shift_event_ids: list[str] = Field(
+        default_factory=list,
+        description="Which event id(s) to shift, when shift_slot is among the "
+        "chosen remedies and the reply names a specific event. Empty if "
+        "shift_slot isn't chosen, or the reply doesn't disambiguate.",
+    )
+    explicit_time: datetime | None = Field(
+        default=None,
+        description="A specific target date/time named in the reply (e.g. "
+        "'3pm', 'Thursday same time'), resolved to an absolute datetime. "
+        "Null if the reply doesn't name a specific time.",
+    )
+    summary: str = Field(
+        description="A short, plain-text description of the plan for the human "
+        "to review before anything is generated, e.g. 'I'll shift Client Sync "
+        "to 10:15am and draft a reply to Priya.'"
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "_ProposedPlan":
+        # Same naive-datetime gap as _EmailIntent/_ShiftProposal -- nothing
+        # forces the LLM to include an offset, and a naive datetime compared
+        # against a timezone-aware CalendarEvent time raises TypeError.
+        if self.explicit_time is not None and self.explicit_time.tzinfo is None:
+            self.explicit_time = self.explicit_time.replace(tzinfo=DEMO_TIMEZONE)
+        return self
+
+
+def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
+    """LLM-assisted interpretation of the human's free-text reply (or a
+    "you decide" delegation) into a structured remedy plan -- which
+    remedies were chosen, possibly more than one, which event(s) to shift
+    if disambiguated, any explicit target time named, and a plain-text
+    summary for confirm_plan to show before anything is generated.
+    """
+    llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
+    structured_llm = llm.with_structured_output(_ProposedPlan, method="json_schema")
+    applicable = _applicable_remedies(item)
+    events_context = "\n".join(f"- id={e.id!r} title={e.title!r}" for e in _item_events(item))
+    prompt = (
+        "A scheduling assistant asked the human what to do about an action "
+        "item and needs to turn the human's free-text reply into a structured "
+        "plan.\n\n"
+        f"Item: [{item.kind}] {item.description}\n"
+        f"Applicable remedies: {', '.join(applicable)}\n"
+        f"Candidate events:\n{events_context}\n\n"
+        f"Human's reply: {reply!r}\n\n"
+        "Only choose remedies from the applicable list above -- ignore anything "
+        "the reply names that isn't in it. If the reply asks the assistant to "
+        "decide (e.g. \"you decide\"), pick whichever applicable remedies make "
+        f"sense for this item. If the reply mentions a time with no explicit "
+        f"UTC offset, assume it's in {DEMO_TIMEZONE}."
+    )
+    return structured_llm.invoke(prompt)
+
+
+def propose_plan(state: PlannerState) -> dict:
+    item = state["action_items"][state["pending_action_index"]]
+    last_human_message = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    plan = _propose_plan(item, last_human_message.content)
+
+    # Deterministic validation, not trusted blindly: an LLM response naming
+    # a remedy that isn't actually applicable to this item's kind must never
+    # reach content_generation.
+    applicable = _applicable_remedies(item)
+    remedies = list(dict.fromkeys(r for r in plan.remedies if r in applicable))
+    if not remedies:
+        remedies = ["skip"]
+
+    shift_event_ids: list[str] = []
+    if "shift_slot" in remedies:
+        item_event_ids = {e.id for e in _item_events(item)}
+        shift_event_ids = [eid for eid in plan.shift_event_ids if eid in item_event_ids]
+        if not shift_event_ids:
+            # Reply didn't disambiguate -- default per kind. EmailConflict
+            # can have several candidate events, and "shift to make room"
+            # means moving all of them; the pairwise kinds only ever need
+            # one of their two events moved to resolve the overlap.
+            if isinstance(item, EmailConflict):
+                shift_event_ids = [e.id for e in item.events]
+            else:
+                shift_event_ids = [_item_events(item)[0].id]
+
+    return {
+        "pending_remedies": remedies,
+        "pending_shift_event_ids": shift_event_ids,
+        "pending_explicit_time": plan.explicit_time,
+        "pending_plan_summary": plan.summary,
+    }
+
+
 def _event_by_id(item: ActionNeeded, event_id: str) -> tools.CalendarEvent:
     if isinstance(item, CalendarOverlapConflict | BackToBackConflict | EmailConflict):
         return next(e for e in item.events if e.id == event_id)

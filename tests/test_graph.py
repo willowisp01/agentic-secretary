@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
 from agentic_secretary.graph import (
@@ -15,8 +15,10 @@ from agentic_secretary.graph import (
     _ChatIntent,
     _EmailIntent,
     _present_item_text,
+    _ProposedPlan,
     build_graph,
     greet,
+    propose_plan,
 )
 from agentic_secretary.tools import CalendarEvent, DraftResult, EmailSummary, EventProposal
 
@@ -260,6 +262,145 @@ def test_present_item_text_offers_accept_meeting_for_email_conflict():
     assert "Accept the meeting" in text
     assert "Skip" in text
     assert "you decide" in text
+
+
+EMAIL_CONFLICT_TWO_EVENTS = EmailConflict(
+    description="'Quick sync tomorrow?' requests a time overlapping 'Team Standup', 'Client Sync'",
+    events=OVERLAPPING_EVENTS,
+    email=EmailSummary(
+        id="m1",
+        thread_id="t1",
+        from_="alex@example.com",
+        to="you@example.com",
+        subject="Quick sync tomorrow?",
+        body="Are you free tomorrow?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    ),
+    proposed_start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+    proposed_duration_minutes=30,
+)
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_filters_out_inapplicable_remedies(mock_propose_plan):
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    mock_propose_plan.return_value = _ProposedPlan(
+        remedies=["shift_slot", "draft_reply", "accept_meeting"],
+        summary="plan",
+    )
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift it")],
+    }
+
+    result = propose_plan(state)
+
+    # calendar_overlap only ever applies shift_slot/skip -- draft_reply and
+    # accept_meeting must be stripped even though the LLM named them.
+    assert result["pending_remedies"] == ["shift_slot"]
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_supports_multiple_remedies(mock_propose_plan):
+    mock_propose_plan.return_value = _ProposedPlan(
+        remedies=["shift_slot", "accept_meeting"],
+        summary="plan",
+    )
+    state = {
+        "action_items": [EMAIL_CONFLICT_TWO_EVENTS],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift it and accept the meeting")],
+    }
+
+    result = propose_plan(state)
+
+    assert result["pending_remedies"] == ["shift_slot", "accept_meeting"]
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_defaults_to_skip_when_nothing_applicable_remains(mock_propose_plan):
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    mock_propose_plan.return_value = _ProposedPlan(remedies=["draft_reply"], summary="plan")
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="draft something")],
+    }
+
+    result = propose_plan(state)
+
+    assert result["pending_remedies"] == ["skip"]
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_defaults_shift_event_ids_to_all_events_for_email_conflict(mock_propose_plan):
+    # EmailConflict can have more than one candidate event; "shift to make
+    # room" with no disambiguation means moving all of them, not guessing one.
+    mock_propose_plan.return_value = _ProposedPlan(remedies=["shift_slot"], summary="plan")
+    state = {
+        "action_items": [EMAIL_CONFLICT_TWO_EVENTS],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift it")],
+    }
+
+    result = propose_plan(state)
+
+    assert set(result["pending_shift_event_ids"]) == {"e1", "e2"}
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_defaults_shift_event_ids_to_first_event_for_pairwise_kind(mock_propose_plan):
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    mock_propose_plan.return_value = _ProposedPlan(remedies=["shift_slot"], summary="plan")
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift it")],
+    }
+
+    result = propose_plan(state)
+
+    assert result["pending_shift_event_ids"] == ["e1"]
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_uses_llm_disambiguated_shift_event_id(mock_propose_plan):
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    mock_propose_plan.return_value = _ProposedPlan(
+        remedies=["shift_slot"], shift_event_ids=["e2"], summary="plan"
+    )
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift Client Sync")],
+    }
+
+    result = propose_plan(state)
+
+    assert result["pending_shift_event_ids"] == ["e2"]
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_carries_explicit_time_and_summary(mock_propose_plan):
+    target = datetime(2026, 7, 10, 15, 0, tzinfo=timezone.utc)
+    mock_propose_plan.return_value = _ProposedPlan(
+        remedies=["shift_slot"],
+        shift_event_ids=["e2"],
+        explicit_time=target,
+        summary="I'll shift Client Sync to 3pm.",
+    )
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift it to 3pm")],
+    }
+
+    result = propose_plan(state)
+
+    assert result["pending_explicit_time"] == target
+    assert result["pending_plan_summary"] == "I'll shift Client Sync to 3pm."
 
 
 def test_greet_emits_an_ai_message():
