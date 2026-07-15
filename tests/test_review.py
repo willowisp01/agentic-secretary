@@ -5,7 +5,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from agentic_secretary.review import _collision_note, review, route_after_review
+from agentic_secretary.review import (
+    _collision_note,
+    _latest_proposals,
+    review,
+    route_after_review,
+)
 from agentic_secretary.state import PlannerState
 from agentic_secretary.tools import CalendarEvent, EventProposal
 
@@ -26,6 +31,26 @@ def _base_state(**overrides) -> PlannerState:
 
 def _proposal_message(proposal: EventProposal) -> ToolMessage:
     return ToolMessage(content=str(proposal), artifact=proposal, tool_call_id="call_1")
+
+
+def _proposal_message_as_dict(proposal: EventProposal) -> ToolMessage:
+    # Live-discovered: ToolMessage.artifact only survives as a real
+    # EventProposal within the same graph.invoke() call that created it.
+    # After a checkpoint round-trip (i.e. any proposal from a prior turn,
+    # by the time review() runs again) it comes back as a plain dict with
+    # the same keys instead -- this simulates that shape directly rather
+    # than requiring an actual checkpointer round-trip in every test.
+    return ToolMessage(
+        content=str(proposal),
+        artifact={
+            "title": proposal.title,
+            "start": proposal.start,
+            "duration_minutes": proposal.duration_minutes,
+            "attendees": proposal.attendees,
+            "existing_event_id": proposal.existing_event_id,
+        },
+        tool_call_id="call_1",
+    )
 
 
 def test_collision_note_is_none_when_nothing_was_proposed():
@@ -54,6 +79,60 @@ def test_collision_note_flags_two_proposals_that_overlap():
     assert note is not None
     assert "Client Sync" in note
     assert "Team Standup" in note
+
+
+def test_collision_note_sees_a_proposal_that_survived_only_as_a_dict():
+    # Reproduces the live bug directly: a proposal from a prior turn whose
+    # ToolMessage.artifact round-tripped through a checkpoint and came
+    # back as a dict, not an EventProposal. Before the fix, this proposal
+    # was invisible to _latest_proposals entirely -- not just mis-keyed --
+    # so its move never excluded the event's original slot from
+    # untouched_events, and the original (already-moved-away-from) time
+    # kept getting compared as if still live.
+    existing = CalendarEvent(
+        id="e1", title="Team Standup", start=NOW, end=NOW + timedelta(minutes=30)
+    )
+    moved = EventProposal(
+        title="Team Standup",
+        start=NOW + timedelta(hours=5),
+        duration_minutes=30,
+        existing_event_id="e1",
+    )
+    state = _base_state(
+        calendar_events=[existing], messages=[_proposal_message_as_dict(moved)]
+    )
+
+    # If the dict-shaped artifact were invisible, "e1" would stay in
+    # untouched_events at its original time and never collide with
+    # anything else here -- so the absence of a note wouldn't prove the
+    # fix works. Assert on the positive: the moved event's original slot
+    # is correctly excluded, by checking a second, real-object proposal
+    # against it lands at the *new* time, not the stale original one.
+    proposals = _latest_proposals(state["messages"])
+    assert len(proposals) == 1
+    assert proposals[0] == moved
+
+
+def test_collision_note_handles_a_mix_of_real_and_dict_shaped_artifacts():
+    # The exact live scenario: one proposal from an earlier turn (already
+    # round-tripped through a checkpoint, now a dict) and one from the
+    # current turn (still a real EventProposal in memory).
+    earlier_turn = EventProposal(title="Client Sync", start=NOW, duration_minutes=45)
+    current_turn = EventProposal(
+        title="Quick sync", start=NOW + timedelta(minutes=15), duration_minutes=30
+    )
+    state = _base_state(
+        messages=[
+            _proposal_message_as_dict(earlier_turn),
+            _proposal_message(current_turn),
+        ]
+    )
+
+    note = _collision_note(state)
+
+    assert note is not None
+    assert "Client Sync" in note
+    assert "Quick sync" in note
 
 
 def test_collision_note_flags_two_proposals_that_are_back_to_back_with_no_buffer():

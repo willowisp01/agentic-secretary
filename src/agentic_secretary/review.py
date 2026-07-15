@@ -27,6 +27,27 @@ _DISCLAIMER = (
 )
 
 
+def _as_event_proposal(artifact: object) -> EventProposal | None:
+    # Live-discovered: ToolMessage.artifact survives as a real EventProposal
+    # only within the same graph.invoke() call that created it. The moment
+    # the graph resumes from an interrupt, it's been through a checkpoint
+    # round-trip -- and .artifact is a nested Any-typed field inside a
+    # LangChain "core" message object, serialized through LangChain's own
+    # message protocol rather than the top-level PlannerState msgpack path
+    # our allowlist covers. It comes back as a plain dict with the same
+    # keys (datetime values survive intact; the dataclass type doesn't).
+    # Every proposal from a prior turn would otherwise silently vanish from
+    # collision-checking.
+    if isinstance(artifact, EventProposal):
+        return artifact
+    if isinstance(artifact, dict):
+        try:
+            return EventProposal(**artifact)
+        except TypeError:
+            return None
+    return None
+
+
 def _latest_proposals(messages: list[AnyMessage]) -> list[EventProposal]:
     # Keyed by existing_event_id (or title, for brand-new events) so a
     # correction's later proposal for the same target supersedes its
@@ -34,12 +55,13 @@ def _latest_proposals(messages: list[AnyMessage]) -> list[EventProposal]:
     # events -- messages accumulate across turns, they aren't replaced.
     latest: dict[str, EventProposal] = {}
     for message in messages:
-        if isinstance(message, ToolMessage) and isinstance(
-            message.artifact, EventProposal
-        ):
-            proposal = message.artifact
-            key = proposal.existing_event_id or proposal.title
-            latest[key] = proposal
+        if not isinstance(message, ToolMessage):
+            continue
+        proposal = _as_event_proposal(message.artifact)
+        if proposal is None:
+            continue
+        key = proposal.existing_event_id or proposal.title
+        latest[key] = proposal
     return list(latest.values())
 
 

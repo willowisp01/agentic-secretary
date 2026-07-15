@@ -31,6 +31,12 @@ Boundaries (enforced in code, but stated here too): neither tool ever sends an e
 books/patches a calendar event. Every tool call only ever produces a proposal or a draft \
 for the human to review afterward -- never act as though something is final.
 
+Whenever a draft reply commits to a specific time (not just asking an open question like \
+"what time works?"), also call propose_event for that same time -- even if it's only \
+tentative pending the recipient's reply. The human's collision check only sees times that \
+went through propose_event; a specific time that exists only inside a drafted email's text \
+is invisible to it, so a real conflict with an existing event could go unnoticed.
+
 Work through every action item listed below using your own judgment about which tool (if \
 either) applies. It's fine to skip an item and say why in your summary, rather than force \
 a resolution that doesn't make sense. If you're genuinely unsure how to handle an item, \
