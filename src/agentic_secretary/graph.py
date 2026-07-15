@@ -1,5 +1,6 @@
 from googleapiclient.discovery import Resource
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import tools_condition
 
@@ -8,7 +9,30 @@ from agentic_secretary.chat import classify_intent, greet
 from agentic_secretary.detection import detect_actions
 from agentic_secretary.resolution import make_agent_node, make_tools_node
 from agentic_secretary.review import review, route_after_review
-from agentic_secretary.state import PlannerState
+from agentic_secretary.state import (
+    BackToBackConflict,
+    CalendarOverlapConflict,
+    EmailConflict,
+    PlannerState,
+    RescheduleRequest,
+)
+
+# Every custom type that ends up inside PlannerState -- LangGraph's default
+# checkpoint serializer warns (and, in a future version, will refuse) to
+# deserialize any type outside its own built-in allowlist, since every
+# interrupt/resume round-trip goes through the checkpointer. Re-solves a gap
+# already fixed once on master (before this redesign branched) for the
+# now-superseded state shape; the types have since moved to state.py/tools.py.
+_CHECKPOINT_ALLOWED_TYPES = (
+    tools.EmailSummary,
+    tools.CalendarEvent,
+    tools.EventProposal,
+    tools.DraftResult,
+    CalendarOverlapConflict,
+    BackToBackConflict,
+    EmailConflict,
+    RescheduleRequest,
+)
 
 
 def build_graph(gmail_service: Resource, calendar_service: Resource):
@@ -50,4 +74,5 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
         "review", route_after_review, {"agent": "agent", END: END}
     )
 
-    return builder.compile(checkpointer=InMemorySaver())
+    serde = JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_ALLOWED_TYPES)
+    return builder.compile(checkpointer=InMemorySaver(serde=serde))
