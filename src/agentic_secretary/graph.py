@@ -96,10 +96,16 @@ ActionNeeded = Annotated[
 
 ChatIntentValue = Literal["check_actions", "others"]
 
+# "accept_meeting" is only ever applicable to EmailConflict items (see
+# _applicable_remedies) -- it proposes the email's own requested meeting as
+# a new calendar entry, rather than moving something already on the
+# calendar out of the way.
+RemedyLiteral = Literal["shift_slot", "draft_reply", "accept_meeting", "skip"]
+
 
 class ActionResolution(BaseModel):
     action_item: ActionNeeded
-    remedy: Literal["shift_slot", "draft_reply", "skip"]
+    remedy: RemedyLiteral
     # Which event to shift, set whenever remedy is "shift_slot" regardless
     # of kind. CalendarOverlapConflict/BackToBackConflict reference two
     # events, so this disambiguates which one -- rather than mutating
@@ -129,7 +135,29 @@ class PlannerState(TypedDict):
     # content_generation, or None on an invalid menu choice that needs
     # re-prompting. Set on every present_menu return, so always defined by
     # the time its own routing function reads it.
+    #
+    # TODO(Task 8.7): remove once present_menu/content_generation no longer
+    # reference it -- superseded by the pending_remedies queue below, which
+    # present_item/propose_plan/confirm_plan (Task 8.3-8.5) populate instead.
     pending_resolution: ActionResolution | None
+    # Remedies queued for the current action item (state["action_items"]
+    # [pending_action_index]), populated by propose_plan once confirmed by
+    # confirm_plan. content_generation (Task 8.6) pops one at a time --
+    # multiple entries mean multiple remedies chosen for the same item
+    # (e.g. shift AND draft), each producing its own ActionResolution.
+    pending_remedies: list[RemedyLiteral]
+    # Event id(s) to shift, when "shift_slot" is queued. A list (not a
+    # single id) because an EmailConflict can have more than one candidate
+    # event -- see propose_plan's per-kind disambiguation default.
+    pending_shift_event_ids: list[str]
+    # A specific target time named in the human's free-text reply, if any.
+    # confirm_plan checks this deterministically against calendar_events/
+    # resolutions before showing it for confirmation; None when the reply
+    # didn't name a specific time (e.g. "you decide").
+    pending_explicit_time: datetime | None
+    # Plain-text plan description authored by propose_plan's LLM call,
+    # displayed verbatim by confirm_plan's interrupt.
+    pending_plan_summary: str
     status: str
 
 
@@ -381,21 +409,26 @@ def _route_after_detect_actions(state: PlannerState) -> str:
     return "present_menu" if state["action_items"] else "end"
 
 
-_REMEDY_LABELS: dict[Literal["shift_slot", "draft_reply", "skip"], str] = {
+_REMEDY_LABELS: dict[RemedyLiteral, str] = {
     "shift_slot": "Shift the slot",
     "draft_reply": "Draft a reply email",
+    "accept_meeting": "Accept the meeting (propose it on the calendar)",
     "skip": "Skip",
 }
 
 
-def _applicable_remedies(item: ActionNeeded) -> list[Literal["shift_slot", "draft_reply", "skip"]]:
+def _applicable_remedies(item: ActionNeeded) -> list[RemedyLiteral]:
     # Deterministic, not LLM-judged: which remedies make sense is a
     # structural fact about the item's type, not a judgment call. Every
     # kind has at least one event to shift; only EmailConflict/
-    # RescheduleRequest have an email to reply to at all.
-    remedies: list[Literal["shift_slot", "draft_reply", "skip"]] = ["shift_slot"]
+    # RescheduleRequest have an email to reply to at all; only
+    # EmailConflict has a proposed *new* meeting to accept -- a
+    # RescheduleRequest is about moving an existing event, not booking one.
+    remedies: list[RemedyLiteral] = ["shift_slot"]
     if isinstance(item, EmailConflict | RescheduleRequest):
         remedies.append("draft_reply")
+    if isinstance(item, EmailConflict):
+        remedies.append("accept_meeting")
     remedies.append("skip")
     return remedies
 

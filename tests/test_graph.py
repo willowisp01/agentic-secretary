@@ -6,9 +6,12 @@ from langgraph.types import Command
 
 from agentic_secretary.graph import (
     ActionResolution,
+    BackToBackConflict,
     CalendarOverlapConflict,
     EmailConflict,
     PlannerState,
+    RescheduleRequest,
+    _applicable_remedies,
     _ChatIntent,
     _EmailIntent,
     build_graph,
@@ -80,8 +83,96 @@ def test_planner_state_has_expected_fields():
         "resolutions",
         "pending_action_index",
         "pending_resolution",
+        "pending_remedies",
+        "pending_shift_event_ids",
+        "pending_explicit_time",
+        "pending_plan_summary",
         "status",
     }
+
+
+def test_applicable_remedies_for_calendar_overlap_excludes_draft_and_accept():
+    standup = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
+    )
+    client_sync = CalendarEvent(
+        id="e2",
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    item = CalendarOverlapConflict(description="overlap", events=[standup, client_sync])
+
+    assert _applicable_remedies(item) == ["shift_slot", "skip"]
+
+
+def test_applicable_remedies_for_back_to_back_excludes_draft_and_accept():
+    lunch = CalendarEvent(
+        id="e1",
+        title="Lunch",
+        start=datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc),
+    )
+    review = CalendarEvent(
+        id="e2",
+        title="Design Review",
+        start=datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 13, 45, tzinfo=timezone.utc),
+    )
+    item = BackToBackConflict(description="no buffer", events=[lunch, review])
+
+    assert _applicable_remedies(item) == ["shift_slot", "skip"]
+
+
+def test_applicable_remedies_for_reschedule_excludes_accept():
+    event = CalendarEvent(
+        id="e1",
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    email = EmailSummary(
+        id="m1",
+        thread_id="t1",
+        from_="priya@example.com",
+        to="you@example.com",
+        subject="Re: Client Sync -- need to move",
+        body="Can we push this?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    item = RescheduleRequest(description="reschedule", event=event, email=email)
+
+    assert _applicable_remedies(item) == ["shift_slot", "draft_reply", "skip"]
+
+
+def test_applicable_remedies_for_email_conflict_includes_accept_meeting():
+    event = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 10, 9, 30, tzinfo=timezone.utc),
+    )
+    email = EmailSummary(
+        id="m1",
+        thread_id="t1",
+        from_="alex@example.com",
+        to="you@example.com",
+        subject="Quick sync tomorrow?",
+        body="Are you free tomorrow?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    item = EmailConflict(
+        description="overlap",
+        events=[event],
+        email=email,
+        proposed_start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+
+    assert _applicable_remedies(item) == ["shift_slot", "draft_reply", "accept_meeting", "skip"]
 
 
 def test_action_resolution_holds_skip_remedy_with_no_proposal():
