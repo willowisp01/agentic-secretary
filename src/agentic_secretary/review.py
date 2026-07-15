@@ -101,15 +101,31 @@ def _collision_note(state: PlannerState) -> str | None:
 
 
 def review(state: PlannerState) -> dict:
+    # The agent's own closing text -- whatever it wrote once it stopped
+    # calling tools for this turn. This is LLM-generated prose, not
+    # anything this node computes.
     summary = state["messages"][-1].content
+
+    # The deterministic check's verdict: None if nothing collides, or a
+    # "Note: ..." string. Computed fresh every call, independent of
+    # whatever the agent's own summary claims.
     note = _collision_note(state)
+
+    # What the human actually sees: the agent's prose, the collision note
+    # underneath it if there is one, then the fixed disclaimer always last.
     display = summary if note is None else f"{summary}\n\n{note}"
     display = f"{display}\n\n{_DISCLAIMER}"
+
+    # Pause the graph here and show `display`. Execution resumes when the
+    # CLI calls Command(resume=<human's reply>); `reply` is that string.
     reply = interrupt(display)
     return {"messages": [HumanMessage(content=reply)]}
 
 
 def route_after_review(state: PlannerState) -> str:
+    # Runs after review()'s interrupt resumes, deciding where to go next:
+    # a recognized exit phrase ends the graph, anything else loops back to
+    # agent (which sees the reply as just another turn in the conversation).
     reply = state["messages"][-1].content
     if reply.strip().lower() in _EXIT_PHRASES:
         return END
