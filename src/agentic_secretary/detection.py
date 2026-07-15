@@ -153,15 +153,8 @@ def _find_email_conflicts(
     conflicts: list[EmailConflict | RescheduleRequest] = []
     events_by_id = {event.id: event for event in calendar_events}
 
-    print(
-        f"=== DEBUG: {len(emails)} emails passed to _find_email_conflicts ==="
-    )  # TEMP
-    for e in emails:  # TEMP
-        print(f"  id={e.id!r} subject={e.subject!r}")  # TEMP
-
     for email in emails:
         intent = _analyze_email(email, calendar_events)
-        print(f"=== DEBUG: intent for {email.subject!r} -> {intent!r} ===")  # TEMP
 
         if (
             intent.proposes_new_meeting
@@ -177,10 +170,6 @@ def _find_email_conflicts(
                 for event in calendar_events
                 if proposed_start < event.end and event.start < proposed_end
             ]
-            print(  # TEMP
-                f"=== DEBUG: proposed_start={proposed_start!r} proposed_end={proposed_end!r} "  # TEMP
-                f"overlapping={[e.id for e in overlapping]!r} ==="  # TEMP
-            )  # TEMP
             if overlapping:
                 titles = ", ".join(repr(e.title) for e in overlapping)
                 conflicts.append(
