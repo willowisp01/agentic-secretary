@@ -25,11 +25,11 @@ against mocks (no live calls in the test suite).
   - [x] Task 8.0: Detection-layer typing foundation (`ActionNeeded` union)
   - [x] Task 8.1: `@tool`-annotate `propose_event`/`draft_reply`
   - [x] Task 8.2: `agent` + `tools` loop
-  - [ ] Task 8.3: `review` node (interrupt + routing)
-  - [ ] Task 8.4: Deterministic collision annotation
-  - [ ] Task 8.5: Graph wiring + CLI
+  - [x] Task 8.3: `review` node (interrupt + routing)
+  - [x] Task 8.4: Deterministic collision annotation
+  - [x] Task 8.5: Graph wiring + CLI
   - [x] Task 8.6: System prompt
-  - [ ] Task 8.7: Live verification
+  - [ ] Task 8.7: Live verification (manual — needs you)
 
 **Checkpoint:** end-to-end CLI run detects seeded action items, resolves
 them autonomously (proposals/drafts as appropriate), presents one review
