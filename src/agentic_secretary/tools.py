@@ -208,4 +208,28 @@ def propose_event(
     )
 
 
-propose_event_tool: BaseTool = tool(propose_event)
+@tool("propose_event", response_format="content_and_artifact")
+def propose_event_tool(
+    title: str,
+    start: datetime,
+    duration_minutes: int,
+    attendees: list[str] | None = None,
+    existing_event_id: str | None = None,
+) -> tuple[str, EventProposal]:
+    """Propose a calendar event time. Never calls Calendar's insert/patch —
+    only builds a structured proposal for human review.
+
+    Omit `existing_event_id` to propose a brand-new event — e.g. accepting
+    a meeting request from an email at the time it suggests. Set
+    `existing_event_id` to the id of an event already on the calendar to
+    propose moving that event to a new start/duration instead.
+    """
+    # response_format="content_and_artifact" keeps the real EventProposal
+    # attached to the resulting ToolMessage as .artifact, not just its str()
+    # in .content -- callers that need the structured value (e.g. the
+    # deterministic collision check in review.py) don't have to re-parse a
+    # repr string to get it back.
+    proposal = propose_event(
+        title, start, duration_minutes, attendees, existing_event_id
+    )
+    return str(proposal), proposal

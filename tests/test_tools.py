@@ -192,11 +192,19 @@ def test_propose_event_tool_exposes_name_and_description_for_binding():
     assert "existing_event_id" in propose_event_tool.description
 
     start = datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc)
-    result = propose_event_tool.invoke(
-        {"title": "Client Sync", "start": start, "duration_minutes": 45}
+    message = propose_event_tool.invoke(
+        {
+            "name": "propose_event",
+            "args": {"title": "Client Sync", "start": start, "duration_minutes": 45},
+            "id": "call_1",
+            "type": "tool_call",
+        }
     )
 
-    assert result == EventProposal(
+    # response_format="content_and_artifact": .content is a display string,
+    # .artifact is the real EventProposal (what the collision check in
+    # review.py needs, without re-parsing a repr string).
+    assert message.artifact == EventProposal(
         title="Client Sync", start=start, duration_minutes=45
     )
 
