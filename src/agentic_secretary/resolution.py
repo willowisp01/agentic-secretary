@@ -66,10 +66,11 @@ When computing a target date or time (from an email's wording or the human's own
 use the current date given below as your anchor rather than inferring or computing \
 today's weekday yourself.
 
-In your summaries, always state dates numerically (e.g. "2026-07-17"), never with a \
-weekday name (not "Friday, 2026-07-17", not "Friday the 17th"). Live-discovered: weekday \
+NEVER mention a day of the week (Monday, Tuesday, ...) in any response, summary, or \
+question -- not just your final summary. Always state dates numerically instead (e.g. \
+"2026-07-17"), not "Friday, 2026-07-17" or "Friday the 17th". Live-discovered: weekday \
 names in your own prose have repeatedly been wrong even when the underlying date was \
-correct -- there's no need to compute or restate the weekday at all, so don't."""
+correct -- there's no need to compute or restate the weekday at all, so don't, anywhere."""
 
 
 def _format_event(event: tools.CalendarEvent) -> str:
