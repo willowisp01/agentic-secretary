@@ -131,6 +131,13 @@ class PlannerState(TypedDict):
     resolutions: Annotated[list[ActionResolution], operator.add]
     # Which action_items entry is currently awaiting a remedy turn.
     pending_action_index: int
+    # A clarifying question from propose_plan, when it couldn't determine
+    # an essential plan detail even with a reasonable default (e.g. which
+    # of two candidate events to shift). present_item shows this (then
+    # clears it) instead of silently defaulting through to a confirm_plan
+    # gate the human has no way to actually answer with a clarification.
+    # None when the last propose_plan run produced a normal plan.
+    pending_clarification: str | None
     # Remedies queued for the current action item (state["action_items"]
     # [pending_action_index]), populated by propose_plan once confirmed by
     # confirm_plan. content_generation (Task 8.6) pops one at a time --
@@ -390,7 +397,11 @@ def detect_actions(state: PlannerState) -> dict:
         + _find_back_to_back(calendar_events)
         + _find_email_actions(emails, calendar_events)
     )
-    result: dict = {"action_items": action_items, "pending_action_index": 0}
+    result: dict = {
+        "action_items": action_items,
+        "pending_action_index": 0,
+        "pending_clarification": None,
+    }
     if not action_items:
         result["messages"] = [AIMessage(content="No action items found -- everything looks clear!")]
     return result
@@ -441,10 +452,17 @@ def _present_item_text(item: ActionNeeded) -> str:
 
 def present_item(state: PlannerState) -> dict:
     # This node only displays the item and captures the raw reply --
-    # propose_plan does the interpretation.
+    # propose_plan does the interpretation. If the previous propose_plan run
+    # couldn't determine an essential detail, lead with its clarifying
+    # question rather than silently re-showing the item as if nothing had
+    # been said yet.
     item = state["action_items"][state["pending_action_index"]]
-    reply = interrupt(_present_item_text(item))
-    return {"messages": [HumanMessage(content=reply)]}
+    text = _present_item_text(item)
+    clarification = state["pending_clarification"]
+    if clarification:
+        text = f"{clarification}\n\n{text}"
+    reply = interrupt(text)
+    return {"messages": [HumanMessage(content=reply)], "pending_clarification": None}
 
 
 def _item_events(item: ActionNeeded) -> list[tools.CalendarEvent]:
@@ -457,11 +475,29 @@ def _item_events(item: ActionNeeded) -> list[tools.CalendarEvent]:
 
 
 class _ProposedPlan(BaseModel):
+    needs_clarification: bool = Field(
+        default=False,
+        description="True only if an essential detail of the plan can't be "
+        "determined even with a reasonable default -- most commonly, the "
+        "item has two candidate events and the reply doesn't indicate which "
+        "one to shift. When true, remedies/shift_event_ids/explicit_time/"
+        "summary are ignored; only clarifying_question is used. Do not set "
+        "this just because the reply is terse (e.g. \"shift\" for an item "
+        "with only one candidate event, or \"you decide\", are NOT "
+        "ambiguous -- a sensible default applies).",
+    )
+    clarifying_question: str = Field(
+        default="",
+        description="If needs_clarification is true, a short question to ask "
+        "the human to resolve the ambiguity (e.g. 'Which event should move "
+        "-- Team Standup or Client Sync?'). Empty otherwise.",
+    )
     remedies: list[RemedyLiteral] = Field(
+        default_factory=list,
         description="The chosen remedy or remedies for this action item, from "
         "the applicable remedies listed. Multiple remedies may be chosen "
         "together (e.g. shift_slot and draft_reply) when the reply asks for "
-        "more than one action."
+        "more than one action. Ignored if needs_clarification is true.",
     )
     shift_event_ids: list[str] = Field(
         default_factory=list,
@@ -476,9 +512,11 @@ class _ProposedPlan(BaseModel):
         "Null if the reply doesn't name a specific time.",
     )
     summary: str = Field(
+        default="",
         description="A short, plain-text description of the plan for the human "
         "to review before anything is generated, e.g. 'I'll shift Client Sync "
-        "to 10:15am and draft a reply to Priya.'"
+        "to 10:15am and draft a reply to Priya.' Ignored if needs_clarification "
+        "is true.",
     )
 
     @model_validator(mode="after")
@@ -526,7 +564,11 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
         f"using the candidate events' start/end above as the anchor date, and "
         f"set explicit_time -- don't leave it null just because the reference "
         f"isn't a bare clock time. If the reply mentions a time with no "
-        f"explicit UTC offset, assume it's in {DEMO_TIMEZONE}."
+        f"explicit UTC offset, assume it's in {DEMO_TIMEZONE}.\n\n"
+        "If choosing shift_slot but the item has more than one candidate "
+        "event and the reply doesn't indicate which one, don't guess -- set "
+        "needs_clarification=true and ask which event in "
+        "clarifying_question instead."
     )
     return structured_llm.invoke(prompt)
 
@@ -535,6 +577,19 @@ def propose_plan(state: PlannerState) -> dict:
     item = state["action_items"][state["pending_action_index"]]
     last_human_message = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
     plan = _propose_plan(item, last_human_message.content)
+
+    if plan.needs_clarification:
+        # Nothing here is ready to show as a plan to confirm -- route
+        # straight back to present_item with the model's own question,
+        # rather than presenting a hedging/incomplete summary at a yes/no
+        # gate the human has no way to actually answer with a clarification.
+        return {
+            "pending_clarification": plan.clarifying_question,
+            "pending_remedies": [],
+            "pending_shift_event_ids": [],
+            "pending_explicit_time": None,
+            "pending_plan_summary": "",
+        }
 
     # Deterministic validation, not trusted blindly: an LLM response naming
     # a remedy that isn't actually applicable to this item's kind must never
@@ -559,11 +614,16 @@ def propose_plan(state: PlannerState) -> dict:
                 shift_event_ids = [_item_events(item)[0].id]
 
     return {
+        "pending_clarification": None,
         "pending_remedies": remedies,
         "pending_shift_event_ids": shift_event_ids,
         "pending_explicit_time": plan.explicit_time,
         "pending_plan_summary": plan.summary,
     }
+
+
+def _route_after_propose_plan(state: PlannerState) -> str:
+    return "present_item" if state["pending_clarification"] else "confirm_plan"
 
 
 def _explicit_time_overlap_warning(
@@ -908,7 +968,11 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
         {"present_item": "present_item", "end": END},
     )
     builder.add_edge("present_item", "propose_plan")
-    builder.add_edge("propose_plan", "confirm_plan")
+    builder.add_conditional_edges(
+        "propose_plan",
+        _route_after_propose_plan,
+        {"confirm_plan": "confirm_plan", "present_item": "present_item"},
+    )
     builder.add_conditional_edges(
         "confirm_plan",
         _route_after_confirm_plan,

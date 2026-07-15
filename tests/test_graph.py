@@ -19,6 +19,7 @@ from agentic_secretary.graph import (
     _ProposedPlan,
     _route_after_confirm_plan,
     _route_after_content_generation,
+    _route_after_propose_plan,
     _run_content_generation,
     build_graph,
     greet,
@@ -96,6 +97,7 @@ def test_planner_state_has_expected_fields():
         "intent",
         "resolutions",
         "pending_action_index",
+        "pending_clarification",
         "pending_remedies",
         "pending_shift_event_ids",
         "pending_explicit_time",
@@ -411,6 +413,44 @@ def test_propose_plan_carries_explicit_time_and_summary(mock_propose_plan):
 
     assert result["pending_explicit_time"] == target
     assert result["pending_plan_summary"] == "I'll shift Client Sync to 3pm."
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_routes_to_clarification_when_llm_flags_it(mock_propose_plan):
+    # Live-discovered gap: a terse reply on a two-event item ("shift", with
+    # no target named) used to silently default to the first event while
+    # the LLM's own summary asked a clarifying question -- the human had no
+    # way to actually answer it, since confirm_plan only accepts yes/no.
+    mock_propose_plan.return_value = _ProposedPlan(
+        needs_clarification=True,
+        clarifying_question="Which event should move -- Team Standup or Client Sync?",
+        remedies=["shift_slot"],
+        summary="I'll shift one of the overlapping events.",
+    )
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "messages": [HumanMessage(content="shift")],
+    }
+
+    result = propose_plan(state)
+
+    assert result["pending_clarification"] == (
+        "Which event should move -- Team Standup or Client Sync?"
+    )
+    assert result["pending_remedies"] == []
+    assert result["pending_shift_event_ids"] == []
+    assert result["pending_explicit_time"] is None
+    assert result["pending_plan_summary"] == ""
+
+
+def test_route_after_propose_plan_goes_to_present_item_when_clarification_needed():
+    assert _route_after_propose_plan({"pending_clarification": "which event?"}) == "present_item"
+
+
+def test_route_after_propose_plan_goes_to_confirm_plan_when_plan_is_ready():
+    assert _route_after_propose_plan({"pending_clarification": None}) == "confirm_plan"
 
 
 def test_explicit_time_overlap_warning_returns_none_when_no_overlap():
@@ -903,6 +943,51 @@ def test_full_flow_reject_at_confirm_plan_reprompts_the_same_item(
 
     assert "__interrupt__" not in final_result
     assert len(final_result["resolutions"]) == 1
+    assert final_result["resolutions"][0].remedy == "skip"
+
+
+@patch("agentic_secretary.graph._propose_plan")
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_full_flow_needs_clarification_reprompts_with_the_question(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent, mock_propose_plan
+):
+    # Live-discovered gap: propose_plan used to always forward to
+    # confirm_plan's yes/no gate even when its own summary was a hedging
+    # clarifying question ("Please clarify which event...") -- the human
+    # had no way to actually answer it there, since "yes"/"no" can't
+    # answer an open question. A needs_clarification plan should skip
+    # confirm_plan and re-show present_item with the question instead.
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    mock_propose_plan.side_effect = [
+        _ProposedPlan(
+            needs_clarification=True,
+            clarifying_question="Which event should move -- Team Standup or Client Sync?",
+            remedies=["shift_slot"],
+            summary="I'll shift one of the overlapping events.",
+        ),
+        _ProposedPlan(remedies=["skip"], summary="I'll skip this."),
+    ]
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    _advance_past_classify_intent(graph, config)
+    reprompt = _advance_past_present_item(graph, config, "shift")
+
+    # Routed straight back to present_item with the clarifying question --
+    # not to confirm_plan's yes/no gate.
+    assert "__interrupt__" in reprompt
+    assert "Which event should move" in reprompt["__interrupt__"][0].value
+    assert "Shift the slot" in reprompt["__interrupt__"][0].value  # item still shown too
+
+    confirm_result = _advance_past_present_item(graph, config, "never mind, skip it")
+    assert "__interrupt__" in confirm_result
+    assert "Confirm this plan?" in confirm_result["__interrupt__"][0].value
+
+    final_result = graph.invoke(Command(resume="yes"), config=config)
+    assert "__interrupt__" not in final_result
     assert final_result["resolutions"][0].remedy == "skip"
 
 
