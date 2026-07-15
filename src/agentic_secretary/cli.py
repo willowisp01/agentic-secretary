@@ -1,7 +1,16 @@
 from googleapiclient.discovery import build
+from langgraph.types import Command
 
 from agentic_secretary.auth import get_credentials
 from agentic_secretary.graph import build_graph
+
+_INITIAL_STATE = {
+    "messages": [],
+    "emails": [],
+    "calendar_events": [],
+    "action_items": [],
+    "status": "pending",
+}
 
 
 def main() -> None:
@@ -9,19 +18,21 @@ def main() -> None:
     gmail_service = build("gmail", "v1", credentials=credentials)
     calendar_service = build("calendar", "v3", credentials=credentials)
     graph = build_graph(gmail_service, calendar_service)
+    config = {"configurable": {"thread_id": "cli"}}
 
-    result = graph.invoke(
-        {"emails": [], "calendar_events": [], "status": "pending"},
-        config={"configurable": {"thread_id": "cli"}},
-    )
+    resume_value = None
+    while True:
+        if resume_value is None:
+            result = graph.invoke(_INITIAL_STATE, config=config)
+        else:
+            result = graph.invoke(Command(resume=resume_value), config=config)
 
-    print(f"Fetched {len(result['emails'])} emails:")
-    for email in result["emails"]:
-        print(f"  - [{email.received_at}] {email.subject} (from {email.from_})")
+        interrupts = result.get("__interrupt__")
+        if not interrupts:
+            break
 
-    print(f"\nFetched {len(result['calendar_events'])} calendar events:")
-    for event in result["calendar_events"]:
-        print(f"  - [{event.start} - {event.end}] {event.title}")
+        print(f"\n{interrupts[0].value}\n")
+        resume_value = input("> ")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+from langgraph.types import Command
+
+from agentic_secretary.chat import _Intent
 from agentic_secretary.detection import _EmailIntent
 from agentic_secretary.graph import build_graph
 from agentic_secretary.state import PlannerState
@@ -26,8 +29,19 @@ FAKE_EVENTS = [
     )
 ]
 # detect_actions now runs on every invoke; stub its LLM call so these
-# fetch/check tests stay about fetch/check, not conflict detection.
+# fetch/check tests stay about fetch/check, not conflict detection. This
+# fixture data has no overlap and no meeting request, so detect_actions
+# finds nothing -- the graph loops back to another greet interrupt rather
+# than reaching the agent, which these tests don't otherwise exercise.
 NO_INTENT = _EmailIntent(proposes_new_meeting=False, requests_reschedule=False)
+
+_INITIAL_STATE: PlannerState = {
+    "messages": [],
+    "emails": [],
+    "calendar_events": [],
+    "action_items": [],
+    "status": "pending",
+}
 
 
 def _build_test_graph():
@@ -47,46 +61,58 @@ def test_planner_state_has_expected_fields():
     }
 
 
+@patch("agentic_secretary.chat.ChatAnthropic")
 @patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
 def test_fetch_emails_runs_before_check_calendar(
-    mock_list_emails, mock_list_events, mock_analyze_email
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_chat_anthropic
 ):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
     graph, gmail_service, calendar_service = _build_test_graph()
     config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
 
     states = list(
         graph.stream(
-            {"emails": [], "calendar_events": [], "status": "pending"},
+            Command(resume="check for conflicts"),
             config=config,
             stream_mode="values",
         )
     )
 
-    # states[0] is the input snapshot; states[1] after fetch_emails; states[2] after check_calendar.
-    assert states[1]["emails"] == FAKE_EMAILS
-    assert states[1]["calendar_events"] == []
-    assert states[2]["emails"] == FAKE_EMAILS
-    assert states[2]["calendar_events"] == FAKE_EVENTS
+    emails_states = [s for s in states if s.get("emails")]
+    events_states = [s for s in states if s.get("calendar_events")]
+    assert emails_states, "expected a state where emails got populated"
+    assert events_states, "expected a state where calendar_events got populated"
+    assert states.index(emails_states[0]) <= states.index(events_states[0])
 
     mock_list_emails.assert_called_once_with(gmail_service)
     mock_list_events.assert_called_once_with(calendar_service)
 
 
+@patch("agentic_secretary.chat.ChatAnthropic")
 @patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
 @patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
 def test_graph_invoke_returns_final_state_with_status_done(
-    mock_list_emails, mock_list_events, mock_analyze_email
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_chat_anthropic
 ):
-    graph, _, _ = _build_test_graph()
-
-    result = graph.invoke(
-        {"emails": [], "calendar_events": [], "status": "pending"},
-        config={"configurable": {"thread_id": "test"}},
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
     )
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)
+
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
 
     assert result["emails"] == FAKE_EMAILS
     assert result["calendar_events"] == FAKE_EVENTS
     assert result["status"] == "done"
+    # No action items in this fixture -- detect_actions routes back to
+    # greet for another turn rather than into the agent, so this second
+    # invoke ends at another interrupt, not a graph-complete state.
+    assert "__interrupt__" in result
