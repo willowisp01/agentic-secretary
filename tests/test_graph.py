@@ -18,6 +18,8 @@ from agentic_secretary.graph import (
     _present_item_text,
     _ProposedPlan,
     _route_after_confirm_plan,
+    _route_after_generation,
+    _run_content_generation,
     build_graph,
     greet,
     propose_plan,
@@ -471,6 +473,199 @@ def test_route_after_confirm_plan_goes_to_content_generation_when_remedies_queue
 
 def test_route_after_confirm_plan_goes_to_present_item_when_remedies_empty():
     assert _route_after_confirm_plan({"pending_remedies": []}) == "present_item"
+
+
+def _generation_state(item, pending_remedies, pending_shift_event_ids=None, resolutions=None):
+    return {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "pending_remedies": pending_remedies,
+        "pending_shift_event_ids": pending_shift_event_ids or [],
+        "calendar_events": OVERLAPPING_EVENTS,
+        "resolutions": resolutions or [],
+    }
+
+
+@patch("agentic_secretary.graph._generate_shift_proposal")
+def test_run_content_generation_shift_slot_fills_in_a_proposal(mock_shift_proposal):
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    fake_proposal = EventProposal(
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 11, 0, tzinfo=timezone.utc),
+        duration_minutes=45,
+        existing_event_id="e2",
+    )
+    mock_shift_proposal.return_value = fake_proposal
+    state = _generation_state(item, ["shift_slot"], ["e2"])
+
+    result = _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    assert len(result["resolutions"]) == 1
+    resolution = result["resolutions"][0]
+    assert resolution.remedy == "shift_slot"
+    assert resolution.shift_event_id == "e2"
+    assert resolution.proposal == fake_proposal
+    assert result["pending_action_index"] == 1
+    assert result["pending_remedies"] == []
+
+
+def test_run_content_generation_skip_makes_no_llm_or_tool_call():
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    state = _generation_state(item, ["skip"])
+
+    with (
+        patch("agentic_secretary.graph._generate_shift_proposal") as mock_shift,
+        patch("agentic_secretary.graph._generate_reply_body") as mock_reply,
+        patch("agentic_secretary.graph.tools.propose_event") as mock_propose_event,
+        patch("agentic_secretary.graph.tools.draft_reply") as mock_draft_reply,
+    ):
+        result = _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    assert result["resolutions"][0].remedy == "skip"
+    assert result["resolutions"][0].proposal is None
+    mock_shift.assert_not_called()
+    mock_reply.assert_not_called()
+    mock_propose_event.assert_not_called()
+    mock_draft_reply.assert_not_called()
+
+
+@patch("agentic_secretary.graph._generate_reply_body")
+def test_run_content_generation_draft_reply_creates_gmail_draft(mock_reply_body):
+    mock_reply_body.return_value = "Sure, Thursday works!"
+    email = EmailSummary(
+        id="m1",
+        thread_id="thread-1",
+        from_="priya@example.com",
+        to="you@example.com",
+        subject="Re: Client Sync -- need to move",
+        body="Can we push this to Thursday, same time?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    item = RescheduleRequest(description="reschedule", event=OVERLAPPING_EVENTS[1], email=email)
+    state = _generation_state(item, ["draft_reply"])
+    gmail_service = MagicMock(name="gmail_service")
+    gmail_service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+        "id": "d1",
+        "message": {"threadId": "thread-1"},
+    }
+
+    result = _run_content_generation(gmail_service, state)
+
+    resolution = result["resolutions"][0]
+    assert resolution.remedy == "draft_reply"
+    assert resolution.proposal == DraftResult(draft_id="d1", thread_id="thread-1")
+    create_kwargs = gmail_service.users.return_value.drafts.return_value.create.call_args.kwargs
+    assert create_kwargs["body"]["message"]["threadId"] == "thread-1"
+
+
+def test_run_content_generation_accept_meeting_proposes_the_requested_meeting_without_llm_call():
+    item = EMAIL_CONFLICT_TWO_EVENTS
+    state = _generation_state(item, ["accept_meeting"])
+
+    with (
+        patch("agentic_secretary.graph._generate_shift_proposal") as mock_shift,
+        patch("agentic_secretary.graph._generate_reply_body") as mock_reply,
+    ):
+        result = _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    resolution = result["resolutions"][0]
+    assert resolution.remedy == "accept_meeting"
+    assert resolution.proposal == EventProposal(
+        title=item.email.subject,
+        start=item.proposed_start,
+        duration_minutes=item.proposed_duration_minutes,
+        existing_event_id=None,
+    )
+    mock_shift.assert_not_called()
+    mock_reply.assert_not_called()
+
+
+@patch("agentic_secretary.graph._generate_reply_body")
+@patch("agentic_secretary.graph._generate_shift_proposal")
+def test_run_content_generation_multi_remedy_produces_multiple_resolutions_across_calls(
+    mock_shift_proposal, mock_reply_body
+):
+    email = EmailSummary(
+        id="m1",
+        thread_id="thread-1",
+        from_="priya@example.com",
+        to="you@example.com",
+        subject="Re: Client Sync -- need to move",
+        body="Can we push this?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    item = RescheduleRequest(description="reschedule", event=OVERLAPPING_EVENTS[1], email=email)
+    mock_shift_proposal.return_value = EventProposal(
+        title="Client Sync",
+        start=datetime(2026, 7, 10, 11, 0, tzinfo=timezone.utc),
+        duration_minutes=45,
+        existing_event_id="e2",
+    )
+    mock_reply_body.return_value = "Sure!"
+    gmail_service = MagicMock(name="gmail_service")
+    gmail_service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+        "id": "d1",
+        "message": {"threadId": "thread-1"},
+    }
+    state = _generation_state(item, ["shift_slot", "draft_reply"], ["e2"])
+
+    first = _run_content_generation(gmail_service, state)
+
+    assert len(first["resolutions"]) == 1
+    assert first["resolutions"][0].remedy == "shift_slot"
+    assert first["pending_remedies"] == ["draft_reply"]
+    assert "pending_action_index" not in first  # not advanced yet -- draft_reply still queued
+
+    state.update(
+        pending_remedies=first["pending_remedies"],
+        pending_shift_event_ids=first["pending_shift_event_ids"],
+        resolutions=first["resolutions"],
+    )
+    second = _run_content_generation(gmail_service, state)
+
+    assert len(second["resolutions"]) == 1
+    assert second["resolutions"][0].remedy == "draft_reply"
+    assert second["pending_action_index"] == 1
+    assert second["pending_remedies"] == []
+
+
+@patch("agentic_secretary.graph._generate_shift_proposal")
+def test_run_content_generation_shift_slot_multiple_events_produces_one_resolution_per_event(
+    mock_shift_proposal
+):
+    mock_shift_proposal.return_value = EventProposal(
+        title="placeholder",
+        start=datetime(2026, 7, 10, 11, 0, tzinfo=timezone.utc),
+        duration_minutes=30,
+    )
+    state = _generation_state(EMAIL_CONFLICT_TWO_EVENTS, ["shift_slot"], ["e1", "e2"])
+
+    first = _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    assert first["resolutions"][0].shift_event_id == "e1"
+    assert first["pending_shift_event_ids"] == ["e2"]
+    assert "pending_remedies" not in first  # unchanged -- still mid shift_slot
+
+    state.update(pending_shift_event_ids=first["pending_shift_event_ids"], resolutions=first["resolutions"])
+    second = _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    assert second["resolutions"][0].shift_event_id == "e2"
+    assert second["pending_action_index"] == 1
+    assert second["pending_remedies"] == []
+
+
+def test_route_after_generation_stays_on_content_generation_when_remedies_remain():
+    assert _route_after_generation({"pending_remedies": ["draft_reply"]}) == "content_generation"
+
+
+def test_route_after_generation_goes_to_present_item_when_more_items_remain():
+    state = {"pending_remedies": [], "pending_action_index": 1, "action_items": [1, 2]}
+    assert _route_after_generation(state) == "present_item"
+
+
+def test_route_after_generation_goes_to_end_when_exhausted():
+    state = {"pending_remedies": [], "pending_action_index": 1, "action_items": [1]}
+    assert _route_after_generation(state) == "end"
 
 
 def test_greet_emits_an_ai_message():

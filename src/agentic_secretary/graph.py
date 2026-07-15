@@ -777,6 +777,110 @@ def _route_after_content_generation(state: PlannerState) -> str:
     return "present_menu"
 
 
+def _finish_remedy(
+    state: PlannerState, resolution: ActionResolution, rest_remedies: list[RemedyLiteral]
+) -> dict:
+    if rest_remedies:
+        # More remedies queued for this same item (e.g. shift_slot done,
+        # draft_reply still to go) -- stay on it, don't advance yet.
+        return {
+            "resolutions": [resolution],
+            "pending_remedies": rest_remedies,
+            "pending_shift_event_ids": [],
+        }
+    # Queue exhausted for this item -- advance to the next one.
+    return {
+        "resolutions": [resolution],
+        "pending_action_index": state["pending_action_index"] + 1,
+        "pending_remedies": [],
+        "pending_shift_event_ids": [],
+        "pending_explicit_time": None,
+        "pending_plan_summary": "",
+    }
+
+
+def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dict:
+    # Standalone so it's directly testable without a compiled graph -- Task
+    # 8.7 wires build_graph's content_generation node to delegate here,
+    # replacing the pending_resolution-based version above.
+    item = state["action_items"][state["pending_action_index"]]
+    remedies = state["pending_remedies"]
+    remedy = remedies[0]
+    rest_remedies = remedies[1:]
+
+    if remedy == "shift_slot":
+        shift_event_ids = state["pending_shift_event_ids"]
+        shift_event_id = shift_event_ids[0]
+        remaining_shift_ids = shift_event_ids[1:]
+        event_to_shift = _event_by_id(item, shift_event_id)
+        proposal = _generate_shift_proposal(
+            event_to_shift, item, state["calendar_events"], state["resolutions"]
+        )
+        resolution = ActionResolution(
+            action_item=item, remedy=remedy, shift_event_id=shift_event_id, proposal=proposal
+        )
+        if remaining_shift_ids:
+            # More events still queued under this same shift_slot remedy
+            # (e.g. an EmailConflict shifting every conflicting event) --
+            # stay on shift_slot, don't pop it off pending_remedies yet.
+            return {
+                "resolutions": [resolution],
+                "pending_shift_event_ids": remaining_shift_ids,
+            }
+        return _finish_remedy(state, resolution, rest_remedies)
+
+    if remedy == "accept_meeting":
+        # Only reachable for EmailConflict items (see _applicable_remedies)
+        # -- proposes the email's own requested meeting using proposed_
+        # start/proposed_duration_minutes, already extracted by _analyze_
+        # email during detection. No new LLM call needed for this remedy.
+        proposal = tools.propose_event(
+            title=item.email.subject,
+            start=item.proposed_start,
+            duration_minutes=item.proposed_duration_minutes,
+            existing_event_id=None,
+        )
+        resolution = ActionResolution(action_item=item, remedy=remedy, proposal=proposal)
+        return _finish_remedy(state, resolution, rest_remedies)
+
+    if remedy == "draft_reply":
+        body = _generate_reply_body(item)
+        original_subject = item.email.subject
+        subject = (
+            original_subject
+            if original_subject.lower().startswith("re:")
+            else f"Re: {original_subject}"
+        )
+        # draft_reply actually calls Gmail's drafts().create() (unlike
+        # propose_event, which is a pure constructor) -- never sends, but
+        # is a real API write, so it needs gmail_service in scope.
+        proposal = tools.draft_reply(
+            gmail_service,
+            to=item.email.from_,
+            subject=subject,
+            body=body,
+            thread_id=item.email.thread_id,
+        )
+        resolution = ActionResolution(action_item=item, remedy=remedy, proposal=proposal)
+        return _finish_remedy(state, resolution, rest_remedies)
+
+    # skip -- no LLM/tool call, no proposal.
+    resolution = ActionResolution(action_item=item, remedy=remedy, proposal=None)
+    return _finish_remedy(state, resolution, rest_remedies)
+
+
+def _route_after_generation(state: PlannerState) -> str:
+    # Temporarily distinctly named from _route_after_content_generation
+    # above (still in active use by the not-yet-replaced present_menu
+    # wiring) -- Task 8.7 removes the old one and wires build_graph to
+    # this instead.
+    if state["pending_remedies"]:
+        return "content_generation"
+    if state["pending_action_index"] >= len(state["action_items"]):
+        return "end"
+    return "present_item"
+
+
 # Every custom type that ends up inside PlannerState -- LangGraph's default
 # checkpoint serializer warns (and, in a future version, will refuse) to
 # deserialize any type outside its own built-in allowlist, since every
