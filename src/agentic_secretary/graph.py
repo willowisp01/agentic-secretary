@@ -608,6 +608,80 @@ def propose_plan(state: PlannerState) -> dict:
     }
 
 
+def _explicit_time_overlap_warning(
+    item: ActionNeeded,
+    shift_event_ids: list[str],
+    explicit_time: datetime,
+    calendar_events: list[tools.CalendarEvent],
+    resolutions: list[ActionResolution],
+) -> str | None:
+    # Deterministic (no LLM): checks a human-named target time against
+    # known busy times before anything gets generated. Advisory only --
+    # confirm_plan still lets the human proceed even when this returns a
+    # warning. The event(s) actually being shifted are excluded from the
+    # busy-time set -- comparing a moved event against its own old slot
+    # would always "overlap" and warn on every ordinary shift.
+    busy: list[tuple[str, datetime, datetime]] = [
+        (e.title, e.start, e.end) for e in calendar_events if e.id not in shift_event_ids
+    ]
+    for r in resolutions:
+        if r.remedy == "shift_slot" and isinstance(r.proposal, tools.EventProposal):
+            proposed_end = r.proposal.start + timedelta(minutes=r.proposal.duration_minutes)
+            busy.append((r.proposal.title, r.proposal.start, proposed_end))
+
+    for event_id in shift_event_ids:
+        event = next((e for e in _item_events(item) if e.id == event_id), None)
+        if event is None:
+            continue
+        duration = event.end - event.start
+        proposed_end = explicit_time + duration
+        for title, busy_start, busy_end in busy:
+            if explicit_time < busy_end and busy_start < proposed_end:
+                return (
+                    f"Note: the proposed time ({explicit_time.isoformat()}) overlaps "
+                    f"with {title!r} ({busy_start.isoformat()} to {busy_end.isoformat()})"
+                )
+    return None
+
+
+def confirm_plan(state: PlannerState) -> dict:
+    item = state["action_items"][state["pending_action_index"]]
+    summary = state["pending_plan_summary"]
+    explicit_time = state["pending_explicit_time"]
+
+    display = summary
+    if explicit_time is not None:
+        warning = _explicit_time_overlap_warning(
+            item,
+            state["pending_shift_event_ids"],
+            explicit_time,
+            state["calendar_events"],
+            state["resolutions"],
+        )
+        if warning is not None:
+            display = f"{summary}\n{warning}"
+
+    reply = interrupt(f"{display}\nConfirm this plan? (yes / no)")
+
+    if reply.strip().lower() in {"y", "yes"}:
+        return {}
+
+    # Rejected/edited: clear pending state so content_generation has
+    # nothing queued, and routing sends the human back to present_item to
+    # re-state what they want for the same item (pending_action_index is
+    # untouched, so it's still the same item).
+    return {
+        "pending_remedies": [],
+        "pending_shift_event_ids": [],
+        "pending_explicit_time": None,
+        "pending_plan_summary": "",
+    }
+
+
+def _route_after_confirm_plan(state: PlannerState) -> str:
+    return "content_generation" if state["pending_remedies"] else "present_item"
+
+
 def _event_by_id(item: ActionNeeded, event_id: str) -> tools.CalendarEvent:
     if isinstance(item, CalendarOverlapConflict | BackToBackConflict | EmailConflict):
         return next(e for e in item.events if e.id == event_id)

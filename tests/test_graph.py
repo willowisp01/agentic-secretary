@@ -14,8 +14,10 @@ from agentic_secretary.graph import (
     _applicable_remedies,
     _ChatIntent,
     _EmailIntent,
+    _explicit_time_overlap_warning,
     _present_item_text,
     _ProposedPlan,
+    _route_after_confirm_plan,
     build_graph,
     greet,
     propose_plan,
@@ -401,6 +403,74 @@ def test_propose_plan_carries_explicit_time_and_summary(mock_propose_plan):
 
     assert result["pending_explicit_time"] == target
     assert result["pending_plan_summary"] == "I'll shift Client Sync to 3pm."
+
+
+def test_explicit_time_overlap_warning_returns_none_when_no_overlap():
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    # Well clear of both OVERLAPPING_EVENTS (9:00-9:30, 9:15-10:00).
+    target = datetime(2026, 7, 10, 14, 0, tzinfo=timezone.utc)
+
+    warning = _explicit_time_overlap_warning(item, ["e1"], target, OVERLAPPING_EVENTS, [])
+
+    assert warning is None
+
+
+def test_explicit_time_overlap_warning_detects_overlap_with_calendar_event():
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    # e1 (Team Standup, 30min) is being shifted here to 9:20, which would
+    # land it inside e2's (Client Sync) 9:15-10:00 window.
+    target = datetime(2026, 7, 10, 9, 20, tzinfo=timezone.utc)
+
+    warning = _explicit_time_overlap_warning(item, ["e1"], target, OVERLAPPING_EVENTS, [])
+
+    assert warning is not None
+    assert "Client Sync" in warning
+
+
+def test_explicit_time_overlap_warning_excludes_the_event_being_shifted_itself():
+    # e1 is the event being moved -- comparing its proposed new time against
+    # its own current calendar entry would always "overlap" and warn on
+    # every ordinary shift, which isn't useful. Move e1 to exactly its
+    # current start with e2 removed from the picture to isolate this.
+    standup_only = [OVERLAPPING_EVENTS[0]]
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    target = OVERLAPPING_EVENTS[0].start
+
+    warning = _explicit_time_overlap_warning(item, ["e1"], target, standup_only, [])
+
+    assert warning is None
+
+
+def test_explicit_time_overlap_warning_detects_overlap_with_already_proposed_shift():
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    already_proposed = ActionResolution(
+        action_item=item,
+        remedy="shift_slot",
+        shift_event_id="e2",
+        proposal=EventProposal(
+            title="Client Sync",
+            start=datetime(2026, 7, 10, 14, 0, tzinfo=timezone.utc),
+            duration_minutes=45,
+            existing_event_id="e2",
+        ),
+    )
+    # e1 shifted to 2:15pm would collide with the already-proposed Client
+    # Sync shift to 2:00-2:45pm this session, even though neither is on the
+    # original calendar_events list anymore.
+    target = datetime(2026, 7, 10, 14, 15, tzinfo=timezone.utc)
+
+    warning = _explicit_time_overlap_warning(item, ["e1"], target, [], [already_proposed])
+
+    assert warning is not None
+    assert "Client Sync" in warning
+
+
+def test_route_after_confirm_plan_goes_to_content_generation_when_remedies_queued():
+    assert _route_after_confirm_plan({"pending_remedies": ["shift_slot"]}) == "content_generation"
+
+
+def test_route_after_confirm_plan_goes_to_present_item_when_remedies_empty():
+    assert _route_after_confirm_plan({"pending_remedies": []}) == "present_item"
 
 
 def test_greet_emits_an_ai_message():
