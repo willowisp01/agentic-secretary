@@ -31,13 +31,19 @@ def main() -> None:
     # confirm_plan, ...) call interrupt(), which halts mid-graph and
     # returns here immediately rather than running to completion -- resume
     # with the human's reply until the graph actually reaches END with no
-    # interrupt pending.
+    # interrupt pending. A blank line before each prompt and a dedicated
+    # line for the "> " cursor keep multi-line prompts (item + remedies,
+    # plan summaries) visually separated from the previous turn's answer,
+    # rather than running together on one line.
     while "__interrupt__" in result:
         prompt = result["__interrupt__"][0].value
-        decision = input(f"{prompt}> ")
+        decision = input(f"\n{prompt}\n> ")
         result = graph.invoke(Command(resume=decision), config=config)
 
-    print(f"Fetched {len(result['emails'])} emails:")
+    divider = "-" * 60
+    print(f"\n{divider}\nSummary\n{divider}")
+
+    print(f"\nFetched {len(result['emails'])} emails:")
     for email in result["emails"]:
         print(f"  - [{email.received_at}] {email.subject} (from {email.from_})")
 
@@ -52,9 +58,12 @@ def main() -> None:
     # A shift-slot proposal has no persisted artifact anywhere (unlike a
     # Gmail draft, which the human can revisit later) -- this transcript is
     # the only place it's ever visible, so show the actual proposed time.
+    # Each resolution gets a leading blank line since there can be more
+    # resolutions than action items (multi-remedy plans), which otherwise
+    # run together with no visual break between them.
     print(f"\nResolved {len(result['resolutions'])} action items:")
     for resolution in result["resolutions"]:
-        print(f"  - [{resolution.action_item.kind}] {resolution.action_item.description}")
+        print(f"\n  - [{resolution.action_item.kind}] {resolution.action_item.description}")
         print(f"    Remedy: {resolution.remedy}")
         if isinstance(resolution.proposal, EventProposal):
             proposed_end = resolution.proposal.start + timedelta(

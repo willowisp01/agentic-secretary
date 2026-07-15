@@ -160,6 +160,6 @@ def test_main_resumes_on_interrupt_until_the_graph_finishes(mock_input):
         main()
 
     assert mock_graph.invoke.call_count == 2
-    mock_input.assert_called_once_with("Check for conflicts?> ")
+    mock_input.assert_called_once_with("\nCheck for conflicts?\n> ")
     resume_call_args = mock_graph.invoke.call_args_list[1]
     assert resume_call_args.args[0] == Command(resume="my answer")
