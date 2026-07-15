@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
 from googleapiclient.discovery import Resource
+from langchain_core.tools import BaseTool, tool
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,27 @@ def draft_reply(
     return DraftResult(draft_id=result["id"], thread_id=result["message"]["threadId"])
 
 
+def make_draft_reply_tool(service: Resource) -> BaseTool:
+    """Bind `draft_reply` to a specific Gmail service instance as a
+    callable LangChain tool. `service` is a runtime dependency the LLM
+    can't supply (it isn't JSON-schema-able), so it's captured via closure
+    rather than exposed as a tool argument.
+    """
+
+    @tool
+    def draft_reply_tool(
+        to: str, subject: str, body: str, thread_id: str
+    ) -> DraftResult:
+        """Draft a reply email to the sender of an email-related action
+        item — e.g. proposing a different time, or acknowledging a
+        reschedule. Never sends; only prepares a Gmail draft for human
+        review.
+        """
+        return draft_reply(service, to, subject, body, thread_id)
+
+    return draft_reply_tool
+
+
 def propose_event(
     title: str,
     start: datetime,
@@ -169,7 +191,14 @@ def propose_event(
     attendees: list[str] | None = None,
     existing_event_id: str | None = None,
 ) -> EventProposal:
-    """Build a structured event proposal. Never calls Calendar's insert/patch."""
+    """Propose a calendar event time. Never calls Calendar's insert/patch —
+    only builds a structured proposal for human review.
+
+    Omit `existing_event_id` to propose a brand-new event — e.g. accepting
+    a meeting request from an email at the time it suggests. Set
+    `existing_event_id` to the id of an event already on the calendar to
+    propose moving that event to a new start/duration instead.
+    """
     return EventProposal(
         title=title,
         start=start,
@@ -177,3 +206,6 @@ def propose_event(
         attendees=attendees,
         existing_event_id=existing_event_id,
     )
+
+
+propose_event_tool: BaseTool = tool(propose_event)

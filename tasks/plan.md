@@ -451,16 +451,34 @@ docstring must state that omitting `existing_event_id` proposes a
 brand-new event (for accepting a meeting request) while setting it
 proposes moving that existing event.
 
+`propose_event` has no service dependency, so it can be wrapped directly:
+`propose_event_tool = tool(propose_event)` (functional form, not the
+`@tool` decorator, so the plain function stays exactly as-is for direct
+calls/existing tests). `draft_reply` can't be decorated in place — it
+takes `service: Resource` as its first argument, and `Resource` isn't
+JSON-schema-able, so a directly-decorated version would either fail schema
+generation or expose an argument the LLM can never legally fill in. Fix:
+`draft_reply` stays a plain function unchanged; add a
+`make_draft_reply_tool(service) -> BaseTool` factory that closes over
+`service` and exposes a `@tool`-decorated inner function taking only
+`to`/`subject`/`body`/`thread_id`.
+
 **Acceptance criteria:**
-- [ ] `propose_event`/`draft_reply` decorated with LangChain's `@tool`
+- [ ] `propose_event_tool = tool(propose_event)` — plain `propose_event`
+      unchanged
+- [ ] `make_draft_reply_tool(service)` returns a bindable tool exposing
+      only `to`/`subject`/`body`/`thread_id`; plain `draft_reply`
+      unchanged
 - [ ] Docstrings specify applicability precisely, including the
       `existing_event_id` semantics above
 
 **Verification:**
-- [ ] `tests/test_tools.py` still passes unchanged (decoration doesn't
-      change behavior/callability as plain functions)
-- [ ] New assertion: each tool exposes `.name`/`.description` suitable for
-      `bind_tools`
+- [ ] `tests/test_tools.py` still passes unchanged (the plain functions
+      keep their existing signatures and direct-call behavior)
+- [ ] New assertions: `propose_event_tool` and
+      `make_draft_reply_tool(service)` each expose `.name`/`.description`
+      suitable for `bind_tools`, and invoking the bound `draft_reply` tool
+      calls through to the same service instance
 
 **Dependencies:** None (independent of 8.0)
 

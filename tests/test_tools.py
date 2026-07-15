@@ -10,7 +10,9 @@ from agentic_secretary.tools import (
     draft_reply,
     list_recent_emails,
     list_upcoming_events,
+    make_draft_reply_tool,
     propose_event,
+    propose_event_tool,
 )
 
 
@@ -183,3 +185,41 @@ def test_propose_event_returns_proposal_without_touching_calendar_api():
     )
     service.events.return_value.insert.assert_not_called()
     service.events.return_value.patch.assert_not_called()
+
+
+def test_propose_event_tool_exposes_name_and_description_for_binding():
+    assert propose_event_tool.name == "propose_event"
+    assert "existing_event_id" in propose_event_tool.description
+
+    start = datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc)
+    result = propose_event_tool.invoke(
+        {"title": "Client Sync", "start": start, "duration_minutes": 45}
+    )
+
+    assert result == EventProposal(
+        title="Client Sync", start=start, duration_minutes=45
+    )
+
+
+def test_draft_reply_tool_binds_to_the_given_service_instance():
+    service = MagicMock()
+    service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+        "id": "draft1",
+        "message": {"id": "m2", "threadId": "t1"},
+    }
+    draft_reply_tool = make_draft_reply_tool(service)
+
+    assert draft_reply_tool.name == "draft_reply_tool"
+    assert draft_reply_tool.description
+
+    result = draft_reply_tool.invoke(
+        {
+            "to": "alex@example.com",
+            "subject": "Re: Quick sync tomorrow?",
+            "body": "Sure, 9:15 works.",
+            "thread_id": "t1",
+        }
+    )
+
+    assert result == DraftResult(draft_id="draft1", thread_id="t1")
+    service.users.return_value.messages.return_value.send.assert_not_called()
