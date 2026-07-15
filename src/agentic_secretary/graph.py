@@ -47,7 +47,14 @@ class BackToBackConflict(BaseModel):
 class EmailConflict(BaseModel):
     kind: Literal["email_conflict"] = "email_conflict"
     description: str
-    event: tools.CalendarEvent
+    # A single proposed meeting can overlap more than one existing event
+    # (e.g. a 9:15am request overlapping both a 9:00 standup and a 9:15
+    # client call) -- list, not a single event, so one email produces one
+    # action item instead of one per overlap. A one-item-per-overlap design
+    # was tried first and found (live testing) to create duplicate,
+    # contradictory Gmail drafts on the same thread once each item was
+    # independently resolved via draft_reply.
+    events: list[tools.CalendarEvent]
     email: tools.EmailSummary
     # The email's proposed time, kept (not just used transiently to compute
     # the overlap) so a future remedy step has something to build a shift
@@ -56,6 +63,12 @@ class EmailConflict(BaseModel):
     # _find_email_actions).
     proposed_start: datetime
     proposed_duration_minutes: int
+
+    @model_validator(mode="after")
+    def _check_arity(self) -> "EmailConflict":
+        if len(self.events) < 1:
+            raise ValueError("email_conflict requires at least 1 event")
+        return self
 
 
 class RescheduleRequest(BaseModel):
@@ -265,19 +278,22 @@ def _find_email_actions(
         ):
             proposed_start = intent.proposed_start
             proposed_end = proposed_start + timedelta(minutes=intent.proposed_duration_minutes)
-            for event in calendar_events:
-                if proposed_start < event.end and event.start < proposed_end:
-                    actions.append(
-                        EmailConflict(
-                            description=(
-                                f"{email.subject!r} requests a time overlapping {event.title!r}"
-                            ),
-                            event=event,
-                            email=email,
-                            proposed_start=proposed_start,
-                            proposed_duration_minutes=intent.proposed_duration_minutes,
-                        )
+            overlapping_events = [
+                event
+                for event in calendar_events
+                if proposed_start < event.end and event.start < proposed_end
+            ]
+            if overlapping_events:
+                titles = ", ".join(repr(e.title) for e in overlapping_events)
+                actions.append(
+                    EmailConflict(
+                        description=f"{email.subject!r} requests a time overlapping {titles}",
+                        events=overlapping_events,
+                        email=email,
+                        proposed_start=proposed_start,
+                        proposed_duration_minutes=intent.proposed_duration_minutes,
                     )
+                )
 
         if intent.requests_reschedule and intent.references_event_id in events_by_id:
             event = events_by_id[intent.references_event_id]
@@ -426,7 +442,7 @@ def _route_after_present_menu(state: PlannerState) -> str:
 
 
 def _event_by_id(item: ActionNeeded, event_id: str) -> tools.CalendarEvent:
-    if isinstance(item, CalendarOverlapConflict | BackToBackConflict):
+    if isinstance(item, CalendarOverlapConflict | BackToBackConflict | EmailConflict):
         return next(e for e in item.events if e.id == event_id)
     return item.event
 

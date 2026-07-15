@@ -95,6 +95,17 @@ def test_calendar_overlap_conflict_requires_exactly_two_events():
         CalendarOverlapConflict(description="bad", events=[STANDUP])
 
 
+def test_email_conflict_requires_at_least_one_event():
+    with pytest.raises(ValidationError):
+        EmailConflict(
+            description="bad",
+            events=[],
+            email=MEETING_REQUEST_EMAIL,
+            proposed_start=STANDUP.start,
+            proposed_duration_minutes=30,
+        )
+
+
 def test_email_intent_clears_reference_id_when_not_rescheduling():
     # Reproduces a live finding: the LLM can attach a real, valid event id to
     # an email that never mentions any event at all (observed for a digest
@@ -256,6 +267,29 @@ def test_detect_actions_finds_email_conflict_with_zero_duration_proposal(mock_an
 
     kinds = {item.kind for item in result["action_items"]}
     assert "email_conflict" in kinds
+
+
+@patch("agentic_secretary.graph._analyze_email")
+def test_detect_actions_groups_email_conflict_across_multiple_overlapping_events(mock_analyze):
+    # Live finding: a proposed meeting overlapping two calendar events used
+    # to produce two independent EmailConflict items for the same email,
+    # which meant each got resolved separately (e.g. two contradictory
+    # Gmail drafts on the same thread when both were answered via
+    # draft_reply). One email conflicting with several events should be one
+    # action item, not one per overlap.
+    mock_analyze.side_effect = lambda email, events: _intent_for(email.id)
+    state = {
+        "emails": [MEETING_REQUEST_EMAIL],
+        "calendar_events": [STANDUP, CLIENT_CALL],
+        "action_items": [],
+        "status": "done",
+    }
+
+    result = detect_actions(state)
+
+    email_conflicts = [item for item in result["action_items"] if isinstance(item, EmailConflict)]
+    assert len(email_conflicts) == 1
+    assert {e.id for e in email_conflicts[0].events} == {STANDUP.id, CLIENT_CALL.id}
 
 
 @patch("agentic_secretary.graph._analyze_email")
