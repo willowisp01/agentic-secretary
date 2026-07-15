@@ -17,6 +17,8 @@ from agentic_secretary.graph import (
     _explicit_time_overlap_warning,
     _present_item_text,
     _ProposedPlan,
+    _related_resolution_note,
+    _related_resolutions,
     _route_after_confirm_plan,
     _route_after_content_generation,
     _route_after_propose_plan,
@@ -306,6 +308,7 @@ def test_propose_plan_filters_out_inapplicable_remedies(mock_propose_plan):
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -327,6 +330,7 @@ def test_propose_plan_supports_multiple_remedies(mock_propose_plan):
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift it and accept the meeting")],
     }
 
@@ -344,6 +348,7 @@ def test_propose_plan_defaults_to_skip_when_nothing_applicable_remains(mock_prop
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="draft something")],
     }
 
@@ -362,6 +367,7 @@ def test_propose_plan_defaults_shift_event_ids_to_all_events_for_email_conflict(
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -379,6 +385,7 @@ def test_propose_plan_defaults_shift_event_ids_to_first_event_for_pairwise_kind(
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -398,6 +405,7 @@ def test_propose_plan_uses_llm_disambiguated_shift_event_id(mock_propose_plan):
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift Client Sync")],
     }
 
@@ -421,6 +429,7 @@ def test_propose_plan_carries_explicit_time_and_summary(mock_propose_plan):
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift it to 3pm")],
     }
 
@@ -448,6 +457,7 @@ def test_propose_plan_routes_to_clarification_when_llm_flags_it(mock_propose_pla
         "pending_action_index": 0,
         "pending_clarification": None,
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="shift")],
     }
 
@@ -482,6 +492,7 @@ def test_propose_plan_circuit_breaker_forces_shift_slot_after_rounds_exhausted(m
         "pending_action_index": 0,
         "pending_clarification": "Which event should move -- Team Standup or Client Sync?",
         "pending_clarification_rounds": 1,  # already at _MAX_CLARIFICATION_ROUNDS
+        "resolutions": [],
         "messages": [HumanMessage(content="you decide")],
     }
 
@@ -511,13 +522,14 @@ def test_propose_plan_passes_pending_clarification_as_prior_question(mock_propos
         "pending_action_index": 0,
         "pending_clarification": "Which event should move -- Team Standup or Client Sync?",
         "pending_clarification_rounds": 0,
+        "resolutions": [],
         "messages": [HumanMessage(content="team standup")],
     }
 
     propose_plan(state)
 
     mock_propose_plan.assert_called_once_with(
-        item, "team standup", "Which event should move -- Team Standup or Client Sync?"
+        item, "team standup", "Which event should move -- Team Standup or Client Sync?", None
     )
 
 
@@ -587,6 +599,196 @@ def test_explicit_time_overlap_warning_detects_overlap_with_already_proposed_shi
 
     assert warning is not None
     assert "Client Sync" in warning
+
+
+_CLIENT_SYNC = OVERLAPPING_EVENTS[1]  # "e2", shared across the fixtures below
+
+
+def test_related_resolutions_finds_shared_event_across_different_kinds():
+    # Live-confirmed as a real bug, not hypothetical: detect_actions runs
+    # independent detection passes with no cross-referencing, so the same
+    # event (Client Sync) ended up the subject of a RescheduleRequest item
+    # AND an EmailConflict item in the same session, resolved independently
+    # to two different, contradictory times -- with nothing surfacing that
+    # they were about the same event at all.
+    reschedule_item = RescheduleRequest(
+        description="reschedule",
+        event=_CLIENT_SYNC,
+        email=EmailSummary(
+            id="m1",
+            thread_id="t1",
+            from_="priya@example.com",
+            to="you@example.com",
+            subject="Re: Client Sync -- need to move",
+            body="Can we push this?",
+            received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+    )
+    already_resolved = ActionResolution(
+        action_item=reschedule_item,
+        remedy="shift_slot",
+        shift_event_id="e2",
+        proposal=EventProposal(
+            title="Client Sync",
+            start=datetime(2026, 7, 17, 9, 15, tzinfo=timezone.utc),
+            duration_minutes=45,
+            existing_event_id="e2",
+        ),
+    )
+    email_conflict_item = EmailConflict(
+        description="'Quick sync tomorrow?' requests a time overlapping 'Client Sync'",
+        events=[_CLIENT_SYNC],
+        email=EmailSummary(
+            id="m2",
+            thread_id="t2",
+            from_="alex@example.com",
+            to="you@example.com",
+            subject="Quick sync tomorrow?",
+            body="Are you free tomorrow?",
+            received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        proposed_start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+
+    related = _related_resolutions(email_conflict_item, [already_resolved])
+
+    assert related == [already_resolved]
+
+
+def test_related_resolutions_empty_when_no_shared_event():
+    item_a = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    unrelated_item = BackToBackConflict(
+        description="no buffer",
+        events=[
+            CalendarEvent(
+                id="e3",
+                title="Lunch",
+                start=datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+                end=datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc),
+            ),
+            CalendarEvent(
+                id="e4",
+                title="Design Review",
+                start=datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc),
+                end=datetime(2026, 7, 10, 13, 45, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+    resolution = ActionResolution(action_item=unrelated_item, remedy="skip")
+
+    assert _related_resolutions(item_a, [resolution]) == []
+
+
+def test_related_resolution_note_mentions_the_proposed_time():
+    item = EmailConflict(
+        description="overlap",
+        events=[_CLIENT_SYNC],
+        email=EmailSummary(
+            id="m2",
+            thread_id="t2",
+            from_="alex@example.com",
+            to="you@example.com",
+            subject="Quick sync tomorrow?",
+            body="Are you free tomorrow?",
+            received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        proposed_start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+    prior_item = RescheduleRequest(
+        description="reschedule",
+        event=_CLIENT_SYNC,
+        email=EmailSummary(
+            id="m1",
+            thread_id="t1",
+            from_="priya@example.com",
+            to="you@example.com",
+            subject="Re: Client Sync -- need to move",
+            body="Can we push this?",
+            received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+    )
+    already_resolved = ActionResolution(
+        action_item=prior_item,
+        remedy="shift_slot",
+        shift_event_id="e2",
+        proposal=EventProposal(
+            title="Client Sync",
+            start=datetime(2026, 7, 17, 9, 15, tzinfo=timezone.utc),
+            duration_minutes=45,
+            existing_event_id="e2",
+        ),
+    )
+
+    note = _related_resolution_note(item, [already_resolved])
+
+    assert note is not None
+    assert "2026-07-17T09:15:00" in note
+    assert "shift_slot" in note
+
+
+def test_related_resolution_note_none_when_nothing_related():
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    assert _related_resolution_note(item, []) is None
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_passes_related_resolution_note_to_llm(mock_propose_plan):
+    mock_propose_plan.return_value = _ProposedPlan(remedies=["shift_slot"], summary="plan")
+    item = EmailConflict(
+        description="overlap",
+        events=[_CLIENT_SYNC],
+        email=EmailSummary(
+            id="m2",
+            thread_id="t2",
+            from_="alex@example.com",
+            to="you@example.com",
+            subject="Quick sync tomorrow?",
+            body="Are you free tomorrow?",
+            received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        proposed_start=datetime(2026, 7, 10, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+    prior_item = RescheduleRequest(
+        description="reschedule",
+        event=_CLIENT_SYNC,
+        email=EmailSummary(
+            id="m1",
+            thread_id="t1",
+            from_="priya@example.com",
+            to="you@example.com",
+            subject="Re: Client Sync -- need to move",
+            body="Can we push this?",
+            received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+    )
+    already_resolved = ActionResolution(
+        action_item=prior_item,
+        remedy="shift_slot",
+        shift_event_id="e2",
+        proposal=EventProposal(
+            title="Client Sync",
+            start=datetime(2026, 7, 17, 9, 15, tzinfo=timezone.utc),
+            duration_minutes=45,
+            existing_event_id="e2",
+        ),
+    )
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "pending_clarification": None,
+        "pending_clarification_rounds": 0,
+        "resolutions": [already_resolved],
+        "messages": [HumanMessage(content="you decide")],
+    }
+
+    propose_plan(state)
+
+    related_context = mock_propose_plan.call_args.args[3]
+    assert related_context is not None
+    assert "2026-07-17T09:15:00" in related_context
 
 
 def test_route_after_confirm_plan_goes_to_content_generation_when_remedies_queued():
@@ -1058,6 +1260,66 @@ def test_full_flow_shift_slot_produces_a_resolution_and_reaches_end(
     # Shifted the chosen event (e2, "Client Sync"), not just the first one.
     shifted_event = mock_shift_proposal.call_args.args[0]
     assert shifted_event.id == "e2"
+
+
+@patch("agentic_secretary.graph._propose_plan")
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email")
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails")
+def test_full_flow_confirm_plan_shows_related_resolution_from_a_different_item(
+    mock_list_emails,
+    mock_list_events,
+    mock_analyze_email,
+    mock_classify_intent,
+    mock_propose_plan,
+):
+    # Live-confirmed as a real bug: detect_actions runs independent
+    # detection passes with no cross-referencing, so Client Sync ended up
+    # the subject of a calendar_overlap item AND a reschedule item in the
+    # same session, resolved independently to two different, contradictory
+    # times, with nothing surfacing that they were the same event.
+    reschedule_email = EmailSummary(
+        id="m1",
+        thread_id="thread-1",
+        from_="priya@example.com",
+        to="you@example.com",
+        subject="Re: Client Sync -- need to move",
+        body="Can we push this?",
+        received_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    mock_list_emails.return_value = [reschedule_email]
+    mock_analyze_email.return_value = _EmailIntent(
+        proposes_new_meeting=False,
+        requests_reschedule=True,
+        references_event_id="e2",
+    )
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    mock_propose_plan.side_effect = [
+        _ProposedPlan(
+            remedies=["shift_slot"],
+            shift_event_ids=["e2"],
+            explicit_time=datetime(2026, 7, 17, 9, 15, tzinfo=timezone.utc),
+            summary="I'll shift Client Sync to Friday.",
+        ),
+        _ProposedPlan(remedies=["skip"], summary="I'll skip this."),
+    ]
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    _advance_past_classify_intent(graph, config)
+    _advance_past_present_item(graph, config, "shift Client Sync to Friday")
+    graph.invoke(Command(resume="yes"), config=config)
+
+    # Second item (reschedule) also involves Client Sync -- its confirm_plan
+    # turn should surface the first item's already-resolved decision,
+    # regardless of what the second propose_plan call's own summary says.
+    second_confirm = _advance_past_present_item(graph, config, "skip it")
+
+    assert "__interrupt__" in second_confirm
+    displayed = second_confirm["__interrupt__"][0].value
+    assert "already resolved earlier this session" in displayed
+    assert "2026-07-17T09:15:00" in displayed
 
 
 @patch("agentic_secretary.graph._propose_plan")

@@ -488,6 +488,37 @@ def _item_events(item: ActionNeeded) -> list[tools.CalendarEvent]:
     return [item.event]
 
 
+def _related_resolutions(item: ActionNeeded, resolutions: list[ActionResolution]) -> list[ActionResolution]:
+    # Deterministic (no LLM): detect_actions runs three independent
+    # detection passes (_find_calendar_overlaps/_find_back_to_back/
+    # _find_email_actions) with no cross-referencing, so the same calendar
+    # event can end up as the subject of multiple, independently-processed
+    # action items with no awareness of each other -- live testing showed
+    # this produce two contradictory resolutions for the same event
+    # (Client Sync shifted to two different times by two separate items).
+    item_event_ids = {e.id for e in _item_events(item)}
+    return [r for r in resolutions if item_event_ids & {e.id for e in _item_events(r.action_item)}]
+
+
+def _related_resolution_note(item: ActionNeeded, resolutions: list[ActionResolution]) -> str | None:
+    related = _related_resolutions(item, resolutions)
+    if not related:
+        return None
+    lines = [
+        "Note: this item shares an event with something already resolved "
+        "earlier this session -- check these don't contradict each other:"
+    ]
+    for r in related:
+        detail = ""
+        if isinstance(r.proposal, tools.EventProposal):
+            proposed_end = r.proposal.start + timedelta(minutes=r.proposal.duration_minutes)
+            detail = f" (now proposed at {r.proposal.start.isoformat()} to {proposed_end.isoformat()})"
+        elif isinstance(r.proposal, tools.DraftResult):
+            detail = " (a reply was drafted)"
+        lines.append(f"- [{r.action_item.kind}] {r.action_item.description} -> {r.remedy}{detail}")
+    return "\n".join(lines)
+
+
 class _ProposedPlan(BaseModel):
     needs_clarification: bool = Field(
         default=False,
@@ -549,7 +580,12 @@ class _ProposedPlan(BaseModel):
         return self
 
 
-def _propose_plan(item: ActionNeeded, reply: str, prior_question: str | None = None) -> _ProposedPlan:
+def _propose_plan(
+    item: ActionNeeded,
+    reply: str,
+    prior_question: str | None = None,
+    related_context: str | None = None,
+) -> _ProposedPlan:
     """LLM-assisted interpretation of the human's free-text reply (or a
     "you decide" delegation) into a structured remedy plan -- which
     remedies were chosen, possibly more than one, which event(s) to shift
@@ -581,6 +617,20 @@ def _propose_plan(item: ActionNeeded, reply: str, prior_question: str | None = N
         if prior_question
         else ""
     )
+    # detect_actions runs independent detection passes with no cross-
+    # referencing, so the same event can be the subject of more than one
+    # action item -- if a prior one this session already resolved
+    # something about an event this item also involves, the plan should
+    # account for that rather than silently contradicting it.
+    related_context_block = (
+        f"{related_context}\n"
+        f"Consider whether this plan should still apply given that, or "
+        f"whether it would now contradict an already-resolved decision -- "
+        f"if so, say so explicitly in the summary rather than silently "
+        f"proceeding as if this were the only decision about that event.\n\n"
+        if related_context
+        else ""
+    )
     prompt = (
         "A scheduling assistant asked the human what to do about an action "
         "item and needs to turn the human's free-text reply into a structured "
@@ -589,6 +639,7 @@ def _propose_plan(item: ActionNeeded, reply: str, prior_question: str | None = N
         f"Applicable remedies: {', '.join(applicable)}\n"
         f"Candidate events:\n{events_context}\n\n"
         f"{prior_question_context}"
+        f"{related_context_block}"
         f"Human's reply: {reply!r}\n\n"
         "Only choose remedies from the applicable list above -- ignore anything "
         "the reply names that isn't in it.\n\n"
@@ -631,7 +682,8 @@ _MAX_CLARIFICATION_ROUNDS = 1
 def propose_plan(state: PlannerState) -> dict:
     item = state["action_items"][state["pending_action_index"]]
     last_human_message = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
-    plan = _propose_plan(item, last_human_message.content, state["pending_clarification"])
+    related_context = _related_resolution_note(item, state["resolutions"])
+    plan = _propose_plan(item, last_human_message.content, state["pending_clarification"], related_context)
 
     clarification_rounds = state["pending_clarification_rounds"]
     if plan.needs_clarification and clarification_rounds < _MAX_CLARIFICATION_ROUNDS:
@@ -751,7 +803,14 @@ def confirm_plan(state: PlannerState) -> dict:
             state["resolutions"],
         )
         if warning is not None:
-            display = f"{summary}\n{warning}"
+            display = f"{display}\n{warning}"
+
+    # Same deterministic-not-LLM-trusted principle as the overlap warning
+    # above -- guaranteed to show regardless of whether propose_plan's LLM
+    # call actually mentioned the shared event in its own summary.
+    related_note = _related_resolution_note(item, state["resolutions"])
+    if related_note is not None:
+        display = f"{display}\n{related_note}"
 
     reply = interrupt(f"{display}\nConfirm this plan? (yes / no)")
 
