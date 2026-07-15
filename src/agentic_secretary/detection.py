@@ -41,7 +41,12 @@ def _find_back_to_back(events: list[tools.CalendarEvent]) -> list[BackToBackConf
     sorted_events = sorted(events, key=lambda e: e.start)
     for a, b in zip(sorted_events, sorted_events[1:]):
         gap = b.start - a.end
-        if timedelta(0) <= gap <= NO_BUFFER_THRESHOLD:
+        # Live-discovered: this was inclusive (<=), so a gap of exactly
+        # NO_BUFFER_THRESHOLD -- e.g. an event deliberately shortened to
+        # create precisely a 15-minute buffer -- still read as "no
+        # buffer". A full threshold's worth of gap is a real buffer;
+        # only strictly-under counts as tight.
+        if timedelta(0) <= gap < NO_BUFFER_THRESHOLD:
             conflicts.append(
                 BackToBackConflict(
                     description=f"{a.title!r} ends right as {b.title!r} starts, no buffer",

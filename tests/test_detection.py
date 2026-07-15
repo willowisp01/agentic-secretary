@@ -6,6 +6,7 @@ from agentic_secretary import seed_data
 from agentic_secretary.detection import (
     _correct_proposed_start_offset,
     _EmailIntent,
+    _find_back_to_back,
     detect_actions,
 )
 from agentic_secretary.tools import CalendarEvent, EmailSummary
@@ -84,6 +85,41 @@ def test_detect_actions_finds_back_to_back():
 
     kinds = {a.kind for a in result["action_items"]}
     assert "back_to_back" in kinds
+
+
+def test_find_back_to_back_does_not_flag_a_full_15_minute_gap():
+    # Live-discovered: a gap of exactly NO_BUFFER_THRESHOLD (15 min) --
+    # e.g. an event deliberately shortened to create a 15-minute buffer --
+    # was still flagged as "no buffer" because the comparison was
+    # inclusive (<=). A full 15-minute gap is a real buffer, not "none";
+    # only gaps strictly under the threshold should still be flagged.
+    early = CalendarEvent(
+        id="e1", title="Lunch", start=NOW, end=NOW + timedelta(minutes=45)
+    )
+    late = CalendarEvent(
+        id="e2",
+        title="Design Review",
+        start=NOW + timedelta(minutes=60),
+        end=NOW + timedelta(minutes=105),
+    )
+
+    assert _find_back_to_back([early, late]) == []
+
+
+def test_find_back_to_back_still_flags_a_gap_just_under_the_threshold():
+    early = CalendarEvent(
+        id="e1", title="Lunch", start=NOW, end=NOW + timedelta(minutes=46)
+    )
+    late = CalendarEvent(
+        id="e2",
+        title="Design Review",
+        start=NOW + timedelta(minutes=60),
+        end=NOW + timedelta(minutes=105),
+    )
+
+    conflicts = _find_back_to_back([early, late])
+
+    assert len(conflicts) == 1
 
 
 def test_detect_actions_no_false_positive_for_well_spaced_events():
