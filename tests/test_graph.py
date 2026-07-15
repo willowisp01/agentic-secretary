@@ -713,6 +713,39 @@ def test_run_content_generation_draft_reply_passes_the_plan_summary(mock_reply_b
     mock_reply_body.assert_called_once_with(item, "I'll ask if they can push it to Friday.")
 
 
+@patch("agentic_secretary.graph._generate_shift_proposal")
+def test_run_content_generation_shift_slot_passes_the_plan_summary(mock_shift_proposal):
+    # Live-discovered gap: _generate_shift_proposal never saw what the
+    # human actually asked for this turn -- a directional/vague request
+    # with no resolvable clock time (e.g. "make it earlier") left
+    # pending_explicit_time unset, so this LLM call was the only thing that
+    # could have honored it, and it had no parameter to receive it at all.
+    # Live testing showed "make it earlier" come back an hour *later*.
+    mock_shift_proposal.return_value = EventProposal(
+        title="Team Standup",
+        start=datetime(2026, 7, 10, 8, 0, tzinfo=timezone.utc),
+        duration_minutes=30,
+        existing_event_id="e1",
+    )
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    state = _generation_state(
+        item,
+        ["shift_slot"],
+        ["e1"],
+        pending_plan_summary="I'll shift Team Standup to an earlier time.",
+    )
+
+    _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    mock_shift_proposal.assert_called_once_with(
+        OVERLAPPING_EVENTS[0],
+        item,
+        state["calendar_events"],
+        state["resolutions"],
+        "I'll shift Team Standup to an earlier time.",
+    )
+
+
 @patch("agentic_secretary.graph._generate_reply_body")
 def test_run_content_generation_draft_reply_creates_gmail_draft(mock_reply_body):
     mock_reply_body.return_value = "Sure, Thursday works!"

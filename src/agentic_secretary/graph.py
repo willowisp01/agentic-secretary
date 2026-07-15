@@ -814,6 +814,7 @@ def _generate_shift_proposal(
     item: ActionNeeded,
     calendar_events: list[tools.CalendarEvent],
     resolutions: list[ActionResolution],
+    plan_summary: str,
 ) -> tools.EventProposal:
     hint = ""
     if isinstance(item, RescheduleRequest) and item.proposed_reschedule_start is not None:
@@ -832,6 +833,13 @@ def _generate_shift_proposal(
         f"(currently {event_to_shift.start.isoformat()} to "
         f"{event_to_shift.end.isoformat()}), because: {item.description}"
         f"{hint}\n\n"
+        f"What the human has already decided: {plan_summary!r}\n\n"
+        f"The new time must reflect this decision -- e.g. a stated "
+        f"direction (\"earlier\", \"later\") or vague time of day (\"this "
+        f"afternoon\") narrows down where the new time must fall, even "
+        f"though it isn't a specific enough clock time to have been "
+        f"resolved automatically. Don't pick an arbitrary free slot that "
+        f"ignores it.\n\n"
         f"Busy times to avoid:\n{_busy_times_context(calendar_events, resolutions)}"
     )
     llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
@@ -927,7 +935,11 @@ def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dic
             proposal = _apply_explicit_shift(event_to_shift, explicit_time)
         else:
             proposal = _generate_shift_proposal(
-                event_to_shift, item, state["calendar_events"], state["resolutions"]
+                event_to_shift,
+                item,
+                state["calendar_events"],
+                state["resolutions"],
+                state["pending_plan_summary"],
             )
         resolution = ActionResolution(
             action_item=item, remedy=remedy, shift_event_id=shift_event_id, proposal=proposal
