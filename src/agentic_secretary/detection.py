@@ -98,7 +98,9 @@ def _analyze_email(
     versus merely mention it?
     """
     llm = ChatAnthropic(
-        model_name=settings.model_name, api_key=settings.anthropic_api_key
+        model_name=settings.model_name,
+        api_key=settings.anthropic_api_key,
+        temperature=0,
     )
     structured_llm = llm.with_structured_output(_EmailIntent, method="json_schema")
     events_context = (
@@ -114,9 +116,35 @@ def _analyze_email(
         f"Email received at: {email.received_at.isoformat()}\n"
         f"Subject: {email.subject}\n"
         f"Body:\n{email.body}\n\n"
-        f"Existing calendar events:\n{events_context}"
+        f"Existing calendar events:\n{events_context}\n\n"
+        "If proposed_start is set, express it using the same UTC offset shown "
+        "in the existing calendar events above (not the email's received-at "
+        "offset, which may differ)."
     )
-    return structured_llm.invoke(prompt)
+    intent = structured_llm.invoke(prompt)
+    return _correct_proposed_start_offset(intent, calendar_events)
+
+
+def _correct_proposed_start_offset(
+    intent: "_EmailIntent", calendar_events: list[tools.CalendarEvent]
+) -> "_EmailIntent":
+    """The LLM reliably reads a casual time like "9:15am" into the right
+    wall-clock hour/minute, but has no trustworthy signal for which UTC
+    offset to attach -- observed live defaulting to the email's received_at
+    offset (itself just a parsing artifact: Gmail's internalDate always
+    parses to UTC, regardless of the account's real timezone), while
+    calendar events carry Google Calendar's actual local offset. Compared
+    as absolute instants, the same intended wall-clock time can end up
+    hours apart. Don't trust the LLM's offset choice -- re-stamp its
+    wall-clock reading with the calendar's own offset instead.
+    """
+    if intent.proposed_start is None or not calendar_events:
+        return intent
+    local_tzinfo = calendar_events[0].start.tzinfo
+    if intent.proposed_start.utcoffset() == calendar_events[0].start.utcoffset():
+        return intent
+    corrected_start = intent.proposed_start.replace(tzinfo=local_tzinfo)
+    return intent.model_copy(update={"proposed_start": corrected_start})
 
 
 def _find_email_conflicts(
@@ -125,8 +153,15 @@ def _find_email_conflicts(
     conflicts: list[EmailConflict | RescheduleRequest] = []
     events_by_id = {event.id: event for event in calendar_events}
 
+    print(
+        f"=== DEBUG: {len(emails)} emails passed to _find_email_conflicts ==="
+    )  # TEMP
+    for e in emails:  # TEMP
+        print(f"  id={e.id!r} subject={e.subject!r}")  # TEMP
+
     for email in emails:
         intent = _analyze_email(email, calendar_events)
+        print(f"=== DEBUG: intent for {email.subject!r} -> {intent!r} ===")  # TEMP
 
         if (
             intent.proposes_new_meeting
@@ -142,6 +177,10 @@ def _find_email_conflicts(
                 for event in calendar_events
                 if proposed_start < event.end and event.start < proposed_end
             ]
+            print(  # TEMP
+                f"=== DEBUG: proposed_start={proposed_start!r} proposed_end={proposed_end!r} "  # TEMP
+                f"overlapping={[e.id for e in overlapping]!r} ==="  # TEMP
+            )  # TEMP
             if overlapping:
                 titles = ", ".join(repr(e.title) for e in overlapping)
                 conflicts.append(

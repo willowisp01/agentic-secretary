@@ -3,7 +3,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agentic_secretary import seed_data
-from agentic_secretary.detection import _EmailIntent, detect_actions
+from agentic_secretary.detection import (
+    _correct_proposed_start_offset,
+    _EmailIntent,
+    detect_actions,
+)
 from agentic_secretary.tools import CalendarEvent, EmailSummary
 from seed_demo_data import resolve_relative_time
 
@@ -230,3 +234,64 @@ def test_detect_actions_groups_multiple_overlapping_events_into_one_email_confli
     email_conflicts = [a for a in result["action_items"] if a.kind == "email_conflict"]
     assert len(email_conflicts) == 1
     assert {e.id for e in email_conflicts[0].events} == {"e1", "e2"}
+
+
+def test_correct_proposed_start_offset_fixes_a_mismatched_offset():
+    # Live-discovered bug: the LLM correctly read "9:15am" into hour=9,
+    # minute=15, but defaulted to UTC (matching the email's received_at,
+    # itself just a Gmail internalDate parsing artifact) instead of the
+    # calendar's real +08:00 local offset. Compared as absolute instants,
+    # the same intended wall-clock time was 8 hours apart from the actual
+    # event -- silently dropping a real conflict.
+    local_tz = timezone(timedelta(hours=8))
+    event = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 16, 9, 0, tzinfo=local_tz),
+        end=datetime(2026, 7, 16, 9, 30, tzinfo=local_tz),
+    )
+    intent = _EmailIntent(
+        proposes_new_meeting=True,
+        requests_reschedule=False,
+        proposed_start=datetime(2026, 7, 16, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+
+    corrected = _correct_proposed_start_offset(intent, [event])
+
+    assert corrected.proposed_start == datetime(2026, 7, 16, 9, 15, tzinfo=local_tz)
+    # The wall-clock reading is untouched -- only the offset changes.
+    assert corrected.proposed_start.hour == 9
+    assert corrected.proposed_start.minute == 15
+
+
+def test_correct_proposed_start_offset_leaves_a_matching_offset_alone():
+    local_tz = timezone(timedelta(hours=8))
+    event = CalendarEvent(
+        id="e1",
+        title="Team Standup",
+        start=datetime(2026, 7, 16, 9, 0, tzinfo=local_tz),
+        end=datetime(2026, 7, 16, 9, 30, tzinfo=local_tz),
+    )
+    already_correct = datetime(2026, 7, 16, 9, 15, tzinfo=local_tz)
+    intent = _EmailIntent(
+        proposes_new_meeting=True,
+        requests_reschedule=False,
+        proposed_start=already_correct,
+        proposed_duration_minutes=30,
+    )
+
+    corrected = _correct_proposed_start_offset(intent, [event])
+
+    assert corrected.proposed_start == already_correct
+
+
+def test_correct_proposed_start_offset_is_a_noop_without_calendar_events():
+    intent = _EmailIntent(
+        proposes_new_meeting=True,
+        requests_reschedule=False,
+        proposed_start=datetime(2026, 7, 16, 9, 15, tzinfo=timezone.utc),
+        proposed_duration_minutes=30,
+    )
+
+    assert _correct_proposed_start_offset(intent, []) is intent
