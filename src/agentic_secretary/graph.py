@@ -455,14 +455,17 @@ def present_item(state: PlannerState) -> dict:
     # propose_plan does the interpretation. If the previous propose_plan run
     # couldn't determine an essential detail, lead with its clarifying
     # question rather than silently re-showing the item as if nothing had
-    # been said yet.
+    # been said yet. pending_clarification is deliberately NOT cleared here
+    # -- propose_plan still needs it (to know the reply is answering that
+    # specific question, not a fresh statement) and clears/replaces it once
+    # actually consumed.
     item = state["action_items"][state["pending_action_index"]]
     text = _present_item_text(item)
     clarification = state["pending_clarification"]
     if clarification:
         text = f"{clarification}\n\n{text}"
     reply = interrupt(text)
-    return {"messages": [HumanMessage(content=reply)], "pending_clarification": None}
+    return {"messages": [HumanMessage(content=reply)]}
 
 
 def _item_events(item: ActionNeeded) -> list[tools.CalendarEvent]:
@@ -533,7 +536,7 @@ class _ProposedPlan(BaseModel):
         return self
 
 
-def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
+def _propose_plan(item: ActionNeeded, reply: str, prior_question: str | None = None) -> _ProposedPlan:
     """LLM-assisted interpretation of the human's free-text reply (or a
     "you decide" delegation) into a structured remedy plan -- which
     remedies were chosen, possibly more than one, which event(s) to shift
@@ -551,6 +554,20 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
         f"- id={e.id!r} title={e.title!r} start={e.start.isoformat()} end={e.end.isoformat()}"
         for e in _item_events(item)
     )
+    # Without this, a short reply answering a just-asked clarifying question
+    # (e.g. "team standup") reads as an under-specified fresh statement --
+    # the reply alone doesn't say shift_slot was already chosen, only that
+    # this event was named, so needs_clarification could fire again on the
+    # very reply meant to resolve it.
+    prior_question_context = (
+        f"You previously asked the human this clarifying question, because "
+        f"their earlier reply didn't fully specify the plan: {prior_question!r}\n"
+        f"The reply below is answering that question -- combine it with "
+        f"whatever was already established (e.g. which remedy was chosen) "
+        f"rather than treating it as a fresh, standalone statement.\n\n"
+        if prior_question
+        else ""
+    )
     prompt = (
         "A scheduling assistant asked the human what to do about an action "
         "item and needs to turn the human's free-text reply into a structured "
@@ -558,6 +575,7 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
         f"Item: [{item.kind}] {item.description}\n"
         f"Applicable remedies: {', '.join(applicable)}\n"
         f"Candidate events:\n{events_context}\n\n"
+        f"{prior_question_context}"
         f"Human's reply: {reply!r}\n\n"
         "Only choose remedies from the applicable list above -- ignore anything "
         "the reply names that isn't in it. If the reply asks the assistant to "
@@ -584,7 +602,7 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
 def propose_plan(state: PlannerState) -> dict:
     item = state["action_items"][state["pending_action_index"]]
     last_human_message = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
-    plan = _propose_plan(item, last_human_message.content)
+    plan = _propose_plan(item, last_human_message.content, state["pending_clarification"])
 
     if plan.needs_clarification:
         # Nothing here is ready to show as a plan to confirm -- route

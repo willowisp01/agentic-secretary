@@ -303,6 +303,7 @@ def test_propose_plan_filters_out_inapplicable_remedies(mock_propose_plan):
     state = {
         "action_items": [item],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -322,6 +323,7 @@ def test_propose_plan_supports_multiple_remedies(mock_propose_plan):
     state = {
         "action_items": [EMAIL_CONFLICT_TWO_EVENTS],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift it and accept the meeting")],
     }
 
@@ -337,6 +339,7 @@ def test_propose_plan_defaults_to_skip_when_nothing_applicable_remains(mock_prop
     state = {
         "action_items": [item],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="draft something")],
     }
 
@@ -353,6 +356,7 @@ def test_propose_plan_defaults_shift_event_ids_to_all_events_for_email_conflict(
     state = {
         "action_items": [EMAIL_CONFLICT_TWO_EVENTS],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -368,6 +372,7 @@ def test_propose_plan_defaults_shift_event_ids_to_first_event_for_pairwise_kind(
     state = {
         "action_items": [item],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift it")],
     }
 
@@ -385,6 +390,7 @@ def test_propose_plan_uses_llm_disambiguated_shift_event_id(mock_propose_plan):
     state = {
         "action_items": [item],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift Client Sync")],
     }
 
@@ -406,6 +412,7 @@ def test_propose_plan_carries_explicit_time_and_summary(mock_propose_plan):
     state = {
         "action_items": [item],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift it to 3pm")],
     }
 
@@ -431,6 +438,7 @@ def test_propose_plan_routes_to_clarification_when_llm_flags_it(mock_propose_pla
     state = {
         "action_items": [item],
         "pending_action_index": 0,
+        "pending_clarification": None,
         "messages": [HumanMessage(content="shift")],
     }
 
@@ -443,6 +451,29 @@ def test_propose_plan_routes_to_clarification_when_llm_flags_it(mock_propose_pla
     assert result["pending_shift_event_ids"] == []
     assert result["pending_explicit_time"] is None
     assert result["pending_plan_summary"] == ""
+
+
+@patch("agentic_secretary.graph._propose_plan")
+def test_propose_plan_passes_pending_clarification_as_prior_question(mock_propose_plan):
+    # Live-discovered gap: propose_plan used to always call _propose_plan
+    # with only the latest reply, no memory of a clarifying question it had
+    # just asked -- a terse answer like "team standup" (answering "which
+    # event should move?") read as an under-specified fresh statement and
+    # could trigger needs_clarification again instead of resolving it.
+    mock_propose_plan.return_value = _ProposedPlan(remedies=["shift_slot"], summary="plan")
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    state = {
+        "action_items": [item],
+        "pending_action_index": 0,
+        "pending_clarification": "Which event should move -- Team Standup or Client Sync?",
+        "messages": [HumanMessage(content="team standup")],
+    }
+
+    propose_plan(state)
+
+    mock_propose_plan.assert_called_once_with(
+        item, "team standup", "Which event should move -- Team Standup or Client Sync?"
+    )
 
 
 def test_route_after_propose_plan_goes_to_present_item_when_clarification_needed():
@@ -1026,6 +1057,41 @@ def test_full_flow_needs_clarification_reprompts_with_the_question(
     final_result = graph.invoke(Command(resume="yes"), config=config)
     assert "__interrupt__" not in final_result
     assert final_result["resolutions"][0].remedy == "skip"
+
+
+@patch("agentic_secretary.graph._propose_plan")
+@patch("agentic_secretary.graph._classify_intent")
+@patch("agentic_secretary.graph._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
+def test_full_flow_clarification_answer_carries_the_prior_question(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_classify_intent, mock_propose_plan
+):
+    # Live-discovered gap: after re-prompting with a clarifying question,
+    # present_item used to clear pending_clarification before propose_plan
+    # ever saw it -- the follow-up reply ("team standup") reached
+    # _propose_plan with no memory of what question it was answering, so
+    # a terse answer could trigger needs_clarification all over again
+    # instead of resolving the original ambiguity.
+    mock_classify_intent.return_value = _ChatIntent(intent="check_actions")
+    mock_propose_plan.side_effect = [
+        _ProposedPlan(
+            needs_clarification=True,
+            clarifying_question="Which event should move -- Team Standup or Client Sync?",
+            summary="I'll shift one of the overlapping events.",
+        ),
+        _ProposedPlan(remedies=["shift_slot"], shift_event_ids=["e1"], summary="I'll shift Team Standup."),
+    ]
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+
+    _advance_past_classify_intent(graph, config)
+    _advance_past_present_item(graph, config, "shift")
+    _advance_past_present_item(graph, config, "team standup")
+
+    second_call = mock_propose_plan.call_args_list[1]
+    assert second_call.args[1] == "team standup"
+    assert second_call.args[2] == "Which event should move -- Team Standup or Client Sync?"
 
 
 @patch("agentic_secretary.graph._propose_plan")
