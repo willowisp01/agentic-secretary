@@ -481,15 +481,40 @@ def test_route_after_confirm_plan_goes_to_present_item_when_remedies_empty():
     assert _route_after_confirm_plan({"pending_remedies": []}) == "present_item"
 
 
-def _generation_state(item, pending_remedies, pending_shift_event_ids=None, resolutions=None):
+def _generation_state(
+    item, pending_remedies, pending_shift_event_ids=None, resolutions=None, pending_explicit_time=None
+):
     return {
         "action_items": [item],
         "pending_action_index": 0,
         "pending_remedies": pending_remedies,
         "pending_shift_event_ids": pending_shift_event_ids or [],
+        "pending_explicit_time": pending_explicit_time,
         "calendar_events": OVERLAPPING_EVENTS,
         "resolutions": resolutions or [],
     }
+
+
+def test_run_content_generation_shift_slot_uses_explicit_time_deterministically():
+    # Live-discovered gap: pending_explicit_time (the human's confirmed
+    # target time) used to never reach generation at all -- content_
+    # generation would call the LLM-based _generate_shift_proposal, which
+    # had no visibility into the confirmed time and could pick something
+    # else entirely, silently overriding what the human just confirmed.
+    item = CalendarOverlapConflict(description="overlap", events=OVERLAPPING_EVENTS)
+    explicit_time = datetime(2026, 7, 10, 15, 0, tzinfo=timezone.utc)
+    state = _generation_state(item, ["shift_slot"], ["e2"], pending_explicit_time=explicit_time)
+
+    with patch("agentic_secretary.graph._generate_shift_proposal") as mock_shift_proposal:
+        result = _run_content_generation(MagicMock(name="gmail_service"), state)
+
+    mock_shift_proposal.assert_not_called()
+    resolution = result["resolutions"][0]
+    assert resolution.proposal.start == explicit_time
+    # e2 (Client Sync) is 45 minutes in OVERLAPPING_EVENTS -- the shifted
+    # proposal must keep that duration, not just the start time.
+    assert resolution.proposal.duration_minutes == 45
+    assert resolution.proposal.existing_event_id == "e2"
 
 
 @patch("agentic_secretary.graph._generate_shift_proposal")

@@ -501,7 +501,14 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
     llm = ChatAnthropic(model_name=settings.model_name, api_key=settings.anthropic_api_key)
     structured_llm = llm.with_structured_output(_ProposedPlan, method="json_schema")
     applicable = _applicable_remedies(item)
-    events_context = "\n".join(f"- id={e.id!r} title={e.title!r}" for e in _item_events(item))
+    # Includes start/end (not just id/title) -- without them there's no
+    # anchor date for the LLM to resolve a relative/symbolic time reference
+    # against (e.g. "12pm same day", "lunchtime"), and explicit_time would
+    # either come out unset or wrong. Matches _analyze_email's events_context.
+    events_context = "\n".join(
+        f"- id={e.id!r} title={e.title!r} start={e.start.isoformat()} end={e.end.isoformat()}"
+        for e in _item_events(item)
+    )
     prompt = (
         "A scheduling assistant asked the human what to do about an action "
         "item and needs to turn the human's free-text reply into a structured "
@@ -513,8 +520,13 @@ def _propose_plan(item: ActionNeeded, reply: str) -> _ProposedPlan:
         "Only choose remedies from the applicable list above -- ignore anything "
         "the reply names that isn't in it. If the reply asks the assistant to "
         "decide (e.g. \"you decide\"), pick whichever applicable remedies make "
-        f"sense for this item. If the reply mentions a time with no explicit "
-        f"UTC offset, assume it's in {DEMO_TIMEZONE}."
+        f"sense for this item. If the reply names a specific target time "
+        f"(clock time, e.g. \"3pm\"; symbolic, e.g. \"lunchtime\"; or relative, "
+        f"e.g. \"same day\", \"Thursday\"), resolve it to an absolute datetime "
+        f"using the candidate events' start/end above as the anchor date, and "
+        f"set explicit_time -- don't leave it null just because the reference "
+        f"isn't a bare clock time. If the reply mentions a time with no "
+        f"explicit UTC offset, assume it's in {DEMO_TIMEZONE}."
     )
     return structured_llm.invoke(prompt)
 
@@ -739,6 +751,26 @@ def _finish_remedy(
     }
 
 
+def _apply_explicit_shift(
+    event_to_shift: tools.CalendarEvent, explicit_time: datetime
+) -> tools.EventProposal:
+    # The human already named -- and confirmed, past confirm_plan's overlap
+    # warning -- a specific target time. Construct the proposal directly
+    # rather than asking the LLM to pick a time: re-litigating a time the
+    # human already confirmed risks silently overriding their decision to
+    # proceed despite a shown warning. (This is what caused a live "shift to
+    # 12pm" request to come out as an unrelated 10:00 slot -- the LLM had a
+    # "pick a reasonable nearby free slot" fallback and no visibility into
+    # what was actually asked for.)
+    duration_minutes = int((event_to_shift.end - event_to_shift.start).total_seconds() // 60)
+    return tools.propose_event(
+        title=event_to_shift.title,
+        start=explicit_time,
+        duration_minutes=duration_minutes,
+        existing_event_id=event_to_shift.id,
+    )
+
+
 def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dict:
     # Standalone (rather than nested in build_graph like fetch_emails/
     # check_calendar) so it's directly testable without a compiled graph;
@@ -753,9 +785,13 @@ def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dic
         shift_event_id = shift_event_ids[0]
         remaining_shift_ids = shift_event_ids[1:]
         event_to_shift = _event_by_id(item, shift_event_id)
-        proposal = _generate_shift_proposal(
-            event_to_shift, item, state["calendar_events"], state["resolutions"]
-        )
+        explicit_time = state["pending_explicit_time"]
+        if explicit_time is not None:
+            proposal = _apply_explicit_shift(event_to_shift, explicit_time)
+        else:
+            proposal = _generate_shift_proposal(
+                event_to_shift, item, state["calendar_events"], state["resolutions"]
+            )
         resolution = ActionResolution(
             action_item=item, remedy=remedy, shift_event_id=shift_event_id, proposal=proposal
         )
