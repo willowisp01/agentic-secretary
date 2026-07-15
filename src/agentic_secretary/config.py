@@ -7,6 +7,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_MODEL_NAME = "claude-haiku-4-5"
+# The agent node orchestrates multi-step tool calls and narrates its own
+# actions back to the human afterward -- the "harder-reasoning node" case
+# the spec allows Sonnet for. Live-discovered: Haiku correctly computed a
+# proposed time (verified via the real EventProposal tool-call args) but
+# then misstated it in its own prose summary two sentences later.
+DEFAULT_AGENT_MODEL_NAME = "claude-sonnet-4-5"
 
 # The seeded burner account's fictional persona is anchored to this
 # timezone. Bare (offset-less) clock times -- "+1d 09:00" in a seed fixture,
@@ -25,6 +31,7 @@ class Settings:
     google_seed_token_path: str
     google_cleanup_token_path: str
     model_name: str
+    agent_model_name: str
 
 
 def _load_settings() -> Settings:
@@ -46,6 +53,7 @@ def _load_settings() -> Settings:
             "GOOGLE_CLEANUP_TOKEN_PATH", "cleanup_token.json"
         ),
         model_name=os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME),
+        agent_model_name=os.getenv("AGENT_MODEL_NAME", DEFAULT_AGENT_MODEL_NAME),
     )
 
 

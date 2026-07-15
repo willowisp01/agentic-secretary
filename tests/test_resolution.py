@@ -6,8 +6,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import tools_condition
 
 from agentic_secretary.resolution import make_agent_node, make_tools_node
-from agentic_secretary.state import CalendarOverlapConflict, PlannerState
-from agentic_secretary.tools import CalendarEvent
+from agentic_secretary.state import (
+    CalendarOverlapConflict,
+    PlannerState,
+    RescheduleRequest,
+)
+from agentic_secretary.tools import CalendarEvent, EmailSummary
 
 NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
 EVENT_A = CalendarEvent(
@@ -59,6 +63,36 @@ def test_agent_seeds_system_and_context_message_on_first_call(mock_chat_anthropi
     assert "e1" in messages[1].content
     assert "e2" in messages[1].content
     assert messages[-1] is final
+
+
+@patch("agentic_secretary.resolution.ChatAnthropic")
+def test_agent_context_includes_the_email_body_not_just_subject(mock_chat_anthropic):
+    # Live-discovered bug: the agent asked the human to "share the actual
+    # email content" for a reschedule/meeting-request item -- it wasn't
+    # being cautious, it genuinely never received the body, only
+    # id/thread_id/from/subject. The proposed time lives in the body text
+    # ("can we push our client sync to Thursday instead?"), so without it
+    # the agent has no way to know what was actually requested.
+    email = EmailSummary(
+        id="m1",
+        thread_id="t1",
+        from_="priya.patel@example.com",
+        to="you@example.com",
+        subject="Re: Client Sync -- need to move",
+        body="Can we push our client sync from tomorrow to Thursday instead?",
+        received_at=NOW,
+    )
+    reschedule = RescheduleRequest(
+        description="asks to reschedule 'Client Sync'", email=email, event=EVENT_A
+    )
+    final = AIMessage(content="What time works for Thursday?")
+    mock_chat_anthropic.return_value = _llm_returning(final)
+
+    agent = make_agent_node(MagicMock(name="gmail_service"))
+    result = agent(_base_state(action_items=[reschedule]))
+
+    context = result["messages"][1].content
+    assert "Can we push our client sync from tomorrow to Thursday instead?" in context
 
 
 @patch("agentic_secretary.resolution.ChatAnthropic")

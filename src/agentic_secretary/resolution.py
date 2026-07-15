@@ -55,7 +55,12 @@ did happens automatically. Acknowledge warmly without implying further action to
 
 When computing a target date or time (from an email's wording or the human's own words), \
 use the current date given below as your anchor rather than inferring or computing \
-today's weekday yourself."""
+today's weekday yourself.
+
+In your summaries, always state dates numerically (e.g. "2026-07-17"), never with a \
+weekday name (not "Friday, 2026-07-17", not "Friday the 17th"). Live-discovered: weekday \
+names in your own prose have repeatedly been wrong even when the underlying date was \
+correct -- there's no need to compute or restate the weekday at all, so don't."""
 
 
 def _format_event(event: tools.CalendarEvent) -> str:
@@ -66,9 +71,16 @@ def _format_event(event: tools.CalendarEvent) -> str:
 
 
 def _format_email(email: tools.EmailSummary) -> str:
+    # Live-discovered: this used to omit `body` entirely -- the agent could
+    # see that an email existed and its subject, but never the actual text
+    # containing what the sender proposed ("are you free tomorrow at
+    # 9:15am?"). It had no way to know a specific time without the human
+    # repeating it, and correctly asked rather than guessing -- but the
+    # right fix is giving it the information it needs, not relying on it to
+    # keep asking.
     return (
         f"id={email.id!r} thread_id={email.thread_id!r} "
-        f"from={email.from_!r} subject={email.subject!r}"
+        f"from={email.from_!r} subject={email.subject!r} body={email.body!r}"
     )
 
 
@@ -118,7 +130,7 @@ def make_agent_node(gmail_service: Resource) -> Callable[[PlannerState], dict]:
 
     def agent(state: PlannerState) -> dict:
         llm = ChatAnthropic(
-            model_name=settings.model_name, api_key=settings.anthropic_api_key
+            model_name=settings.agent_model_name, api_key=settings.anthropic_api_key
         )
         llm_with_tools = llm.bind_tools(bound_tools)
 

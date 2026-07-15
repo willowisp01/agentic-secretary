@@ -5,6 +5,15 @@ def test_default_model_name_is_haiku():
     assert settings.model_name == "claude-haiku-4-5"
 
 
+def test_default_agent_model_name_is_sonnet():
+    # The agent node orchestrates multi-step tool calls and narrates its
+    # own actions back to the human -- the "harder-reasoning node" case
+    # the spec allows a stronger model for, distinct from the classification/
+    # extraction nodes that stay on the cheaper default.
+    assert settings.agent_model_name == "claude-sonnet-4-5"
+    assert settings.agent_model_name != settings.model_name
+
+
 def test_settings_expose_required_fields():
     assert hasattr(settings, "anthropic_api_key")
     assert hasattr(settings, "langsmith_api_key")
