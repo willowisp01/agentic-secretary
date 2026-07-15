@@ -126,20 +126,11 @@ class PlannerState(TypedDict):
     # Routing signal for classify_intent's conditional edge, not
     # conversation content -- overwritten each time classify_intent runs.
     intent: ChatIntentValue
-    # Appended to (never replaced) as present_menu works through
-    # action_items one at a time.
+    # Appended to (never replaced) as present_item/content_generation work
+    # through action_items one at a time.
     resolutions: Annotated[list[ActionResolution], operator.add]
-    # Which action_items entry is currently awaiting a menu choice.
+    # Which action_items entry is currently awaiting a remedy turn.
     pending_action_index: int
-    # The remedy choice (proposal not yet filled in) awaiting
-    # content_generation, or None on an invalid menu choice that needs
-    # re-prompting. Set on every present_menu return, so always defined by
-    # the time its own routing function reads it.
-    #
-    # TODO(Task 8.7): remove once present_menu/content_generation no longer
-    # reference it -- superseded by the pending_remedies queue below, which
-    # present_item/propose_plan/confirm_plan (Task 8.3-8.5) populate instead.
-    pending_resolution: ActionResolution | None
     # Remedies queued for the current action item (state["action_items"]
     # [pending_action_index]), populated by propose_plan once confirmed by
     # confirm_plan. content_generation (Task 8.6) pops one at a time --
@@ -406,7 +397,7 @@ def detect_actions(state: PlannerState) -> dict:
 
 
 def _route_after_detect_actions(state: PlannerState) -> str:
-    return "present_menu" if state["action_items"] else "end"
+    return "present_item" if state["action_items"] else "end"
 
 
 _REMEDY_LABELS: dict[RemedyLiteral, str] = {
@@ -433,47 +424,6 @@ def _applicable_remedies(item: ActionNeeded) -> list[RemedyLiteral]:
     return remedies
 
 
-def present_menu(state: PlannerState) -> dict:
-    item = state["action_items"][state["pending_action_index"]]
-    remedies = _applicable_remedies(item)
-
-    menu_lines = [f"[{item.kind}] {item.description}"]
-    menu_lines += [f"{i}. {_REMEDY_LABELS[r]}" for i, r in enumerate(remedies, start=1)]
-    choice_text = interrupt("\n".join(menu_lines))
-
-    try:
-        remedy = remedies[int(choice_text.strip()) - 1]
-    except (ValueError, IndexError):
-        # Invalid choice: record nothing -- the routing after this node
-        # checks pending_resolution, which stays None, so it re-shows this
-        # same menu rather than proceeding to content_generation.
-        return {"pending_resolution": None}
-
-    shift_event_id: str | None = None
-    if remedy == "shift_slot":
-        if isinstance(item, CalendarOverlapConflict | BackToBackConflict):
-            # Two events on this kind, unlike EmailConflict/RescheduleRequest
-            # (exactly one) -- ask which one, rather than guessing.
-            event_lines = [f"{i}. {e.title!r}" for i, e in enumerate(item.events, start=1)]
-            which_text = interrupt("Which event should move?\n" + "\n".join(event_lines))
-            try:
-                shift_event_id = item.events[int(which_text.strip()) - 1].id
-            except (ValueError, IndexError):
-                shift_event_id = item.events[0].id
-        else:
-            shift_event_id = item.event.id
-
-    # Not yet appended to resolutions or advancing pending_action_index --
-    # content_generation (next) fills in proposal and finalizes both, since
-    # skip needs no LLM/tool call but shift_slot/draft_reply do.
-    resolution = ActionResolution(action_item=item, remedy=remedy, shift_event_id=shift_event_id)
-    return {"pending_resolution": resolution}
-
-
-def _route_after_present_menu(state: PlannerState) -> str:
-    return "content_generation" if state["pending_resolution"] is not None else "present_menu"
-
-
 def _present_item_text(item: ActionNeeded) -> str:
     # Suggested remedies as plain text, not a forced numbered menu -- the
     # human (or "you decide") can name any combination in free text, which
@@ -490,12 +440,8 @@ def _present_item_text(item: ActionNeeded) -> str:
 
 
 def present_item(state: PlannerState) -> dict:
-    # Replaces present_menu's forced numbered choice with an open turn --
-    # this node only displays the item and captures the raw reply;
-    # propose_plan (Task 8.4) does the interpretation. Not yet wired into
-    # build_graph -- Task 8.7 does the actual node swap, once
-    # propose_plan/confirm_plan/content_generation are ready to consume
-    # what this node produces.
+    # This node only displays the item and captures the raw reply --
+    # propose_plan does the interpretation.
     item = state["action_items"][state["pending_action_index"]]
     reply = interrupt(_present_item_text(item))
     return {"messages": [HumanMessage(content=reply)]}
@@ -771,12 +717,6 @@ def _generate_reply_body(item: EmailConflict | RescheduleRequest) -> str:
     return structured_llm.invoke(prompt).body
 
 
-def _route_after_content_generation(state: PlannerState) -> str:
-    if state["pending_action_index"] >= len(state["action_items"]):
-        return "end"
-    return "present_menu"
-
-
 def _finish_remedy(
     state: PlannerState, resolution: ActionResolution, rest_remedies: list[RemedyLiteral]
 ) -> dict:
@@ -800,9 +740,9 @@ def _finish_remedy(
 
 
 def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dict:
-    # Standalone so it's directly testable without a compiled graph -- Task
-    # 8.7 wires build_graph's content_generation node to delegate here,
-    # replacing the pending_resolution-based version above.
+    # Standalone (rather than nested in build_graph like fetch_emails/
+    # check_calendar) so it's directly testable without a compiled graph;
+    # build_graph's content_generation node delegates here.
     item = state["action_items"][state["pending_action_index"]]
     remedies = state["pending_remedies"]
     remedy = remedies[0]
@@ -869,11 +809,7 @@ def _run_content_generation(gmail_service: Resource, state: PlannerState) -> dic
     return _finish_remedy(state, resolution, rest_remedies)
 
 
-def _route_after_generation(state: PlannerState) -> str:
-    # Temporarily distinctly named from _route_after_content_generation
-    # above (still in active use by the not-yet-replaced present_menu
-    # wiring) -- Task 8.7 removes the old one and wires build_graph to
-    # this instead.
+def _route_after_content_generation(state: PlannerState) -> str:
     if state["pending_remedies"]:
         return "content_generation"
     if state["pending_action_index"] >= len(state["action_items"]):
@@ -909,41 +845,7 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
         }
 
     def content_generation(state: PlannerState) -> dict:
-        pending = state["pending_resolution"]
-        item = pending.action_item
-
-        if pending.remedy == "skip":
-            proposal = None
-        elif pending.remedy == "shift_slot":
-            event_to_shift = _event_by_id(item, pending.shift_event_id)
-            proposal = _generate_shift_proposal(
-                event_to_shift, item, state["calendar_events"], state["resolutions"]
-            )
-        else:  # draft_reply -- only EmailConflict/RescheduleRequest offer it
-            body = _generate_reply_body(item)
-            original_subject = item.email.subject
-            subject = (
-                original_subject
-                if original_subject.lower().startswith("re:")
-                else f"Re: {original_subject}"
-            )
-            # draft_reply actually calls Gmail's drafts().create() (unlike
-            # propose_event, which is a pure constructor) -- never sends,
-            # but is a real API write, so it needs gmail_service in scope.
-            proposal = tools.draft_reply(
-                gmail_service,
-                to=item.email.from_,
-                subject=subject,
-                body=body,
-                thread_id=item.email.thread_id,
-            )
-
-        finalized = pending.model_copy(update={"proposal": proposal})
-        return {
-            "resolutions": [finalized],
-            "pending_action_index": state["pending_action_index"] + 1,
-            "pending_resolution": None,
-        }
+        return _run_content_generation(gmail_service, state)
 
     builder = StateGraph(PlannerState)
     builder.add_node("greet", greet)
@@ -951,7 +853,9 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
     builder.add_node("detect_actions", detect_actions)
-    builder.add_node("present_menu", present_menu)
+    builder.add_node("present_item", present_item)
+    builder.add_node("propose_plan", propose_plan)
+    builder.add_node("confirm_plan", confirm_plan)
     builder.add_node("content_generation", content_generation)
     builder.add_edge(START, "greet")
     builder.add_edge("greet", "classify_intent")
@@ -965,17 +869,23 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_conditional_edges(
         "detect_actions",
         _route_after_detect_actions,
-        {"present_menu": "present_menu", "end": END},
+        {"present_item": "present_item", "end": END},
     )
+    builder.add_edge("present_item", "propose_plan")
+    builder.add_edge("propose_plan", "confirm_plan")
     builder.add_conditional_edges(
-        "present_menu",
-        _route_after_present_menu,
-        {"content_generation": "content_generation", "present_menu": "present_menu"},
+        "confirm_plan",
+        _route_after_confirm_plan,
+        {"content_generation": "content_generation", "present_item": "present_item"},
     )
     builder.add_conditional_edges(
         "content_generation",
         _route_after_content_generation,
-        {"present_menu": "present_menu", "end": END},
+        {
+            "content_generation": "content_generation",
+            "present_item": "present_item",
+            "end": END,
+        },
     )
     serde = JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_ALLOWED_TYPES)
     return builder.compile(checkpointer=InMemorySaver(serde=serde))

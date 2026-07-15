@@ -27,10 +27,11 @@ def main() -> None:
         config=config,
     )
 
-    # Nodes that pause for chat input (classify_intent, present_menu, ...)
-    # call interrupt(), which halts mid-graph and returns here immediately
-    # rather than running to completion -- resume with the human's reply
-    # until the graph actually reaches END with no interrupt pending.
+    # Nodes that pause for chat input (classify_intent, present_item,
+    # confirm_plan, ...) call interrupt(), which halts mid-graph and
+    # returns here immediately rather than running to completion -- resume
+    # with the human's reply until the graph actually reaches END with no
+    # interrupt pending.
     while "__interrupt__" in result:
         prompt = result["__interrupt__"][0].value
         decision = input(f"{prompt}> ")
@@ -59,8 +60,12 @@ def main() -> None:
             proposed_end = resolution.proposal.start + timedelta(
                 minutes=resolution.proposal.duration_minutes
             )
+            # accept_meeting proposes a brand-new calendar entry
+            # (existing_event_id is None); shift_slot moves one that's
+            # already there -- worth distinguishing in the transcript.
+            verb = "move" if resolution.proposal.existing_event_id else "propose new event"
             print(
-                f"    Proposed: move {resolution.proposal.title!r} to "
+                f"    Proposed: {verb} {resolution.proposal.title!r} at "
                 f"{resolution.proposal.start} - {proposed_end}"
             )
         elif isinstance(resolution.proposal, DraftResult):
