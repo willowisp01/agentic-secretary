@@ -19,14 +19,15 @@ synthetic emails and calendar events (see Seed Data below).
 **Success looks like:** running the CLI against the seeded burner account
 opens a chat session — the agent greets the user, the user replies with
 free text (e.g. "check for conflicts"), and the agent (a) fetches the day's
-schedule and inbox, (b) identifies at least one real time conflict between
-a calendar event and an incoming meeting-request email, and (c) presents
-each conflict with a menu of remedies (shift the slot / draft a reply
-email / skip) for the human to choose — rather than unilaterally
-authoring one draft to approve or reject. Chosen remedies stay
-propose-only (a Gmail draft or a structured event proposal); actually
-sending the email or booking the slot is deferred to a later milestone. The
-full reasoning trace is visible in LangSmith.
+schedule and inbox, (b) identifies at least one real action item — a time
+conflict or a meeting-request/reschedule email — and (c) resolves what it
+can on its own judgment using bound tools (propose a new event time, or
+draft a reply), then presents one summary of what it did for the human to
+review and correct — rather than gating each individual decision behind a
+pre-approval menu. Every resolution stays propose-only (a Gmail draft or a
+structured event proposal); actually sending the email or booking the slot
+is deferred to a later milestone. The full reasoning trace is visible in
+LangSmith.
 
 ## Tech Stack
 
@@ -79,7 +80,11 @@ agentic-secretary/
 │   ├── seed_data.py           # typed loader/validator for seed_data/*.yaml
 │   ├── tools.py                # thin tool wrappers: list_recent_emails,
 │   │                           #   list_upcoming_events, draft_reply, propose_event
-│   └── graph.py                # LangGraph graph: PlannerState + nodes + edges
+│   ├── state.py                # PlannerState TypedDict
+│   ├── detection.py            # ActionNeeded union + detect_actions node
+│   ├── resolution.py           # agent node: system prompt + bound-tool LLM loop
+│   ├── review.py               # review node: summary interrupt + sanity annotation
+│   └── graph.py                # LangGraph wiring only: nodes + edges + compile
 ├── tests/                     # one test module per src/scripts module above
 └── docs/
     ├── intent/ai-secretary.md
@@ -87,8 +92,15 @@ agentic-secretary/
 ```
 
 Node/tool files stay single-file (not split into subpackages) while the node
-count is small (~5). Revisit this once RAG (milestone 2) adds enough new
-tools/nodes to justify splitting.
+count is small. Task 8 splits what was a single `graph.py` (types +
+detection + resolution + wiring) into `state.py`/`detection.py`/
+`resolution.py`/`review.py`/`graph.py` along node boundaries, once the node
+count reached six (`fetch_emails`, `check_calendar`, `detect_actions`,
+`agent`, `tools`, `review`) and `graph.py` was heading toward also holding
+the system prompt and the tool-calling/review-interrupt logic on top of
+detection — sooner than the originally-anticipated "revisit at milestone 2"
+point, but for the same underlying reason (file size/readability), not a
+scope change.
 
 ## Code Style
 
@@ -98,14 +110,11 @@ tools/nodes to justify splitting.
 
 ```python
 class PlannerState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]  # chat turns: greeting,
-                                                           # human input, menu replies
+    messages: Annotated[list[AnyMessage], add_messages]  # chat turns + the
+                                                           # agent's own tool-calling history
     emails: list[EmailSummary]
     calendar_events: list[CalendarEvent]
-    conflicts: list[Conflict]
-    pending_conflict_index: int          # which conflict is awaiting a menu choice
-    resolutions: Annotated[list[ConflictResolution], operator.add]  # chosen
-                                                           # remedy per conflict
+    action_items: list[ActionNeeded]
 
 def check_calendar(state: PlannerState) -> dict:
     events = tools.list_upcoming_events(calendar_service)
@@ -113,12 +122,14 @@ def check_calendar(state: PlannerState) -> dict:
 ```
 
 Nodes return a partial dict of only the keys they update — not a full-state
-spread — so each field's reducer (default: replace; `add_messages`/
-`operator.add`: append) decides how it merges. `PlannerState` grows
-incrementally with the graph: the Task 6 skeleton (`fetch_emails →
-check_calendar`) only needs `emails`/`calendar_events`/`status`; `messages`,
-`conflicts`, `pending_conflict_index`, and `resolutions` are added once the
-conflict-detection and chat-menu nodes that use them exist (Task 7/8).
+spread — so each field's reducer (default: replace; `add_messages`:
+append) decides how it merges. `PlannerState` grows incrementally with the
+graph: the Task 6 skeleton (`fetch_emails → check_calendar`) only needs
+`emails`/`calendar_events`/`status`; `messages` and `action_items` are added
+once the chat loop and the detection/resolution nodes that use them exist
+(Task 7/8). There's no separate `resolutions` field or per-item pending
+index — what the agent did lives in `messages` (its own tool calls and
+results), not a hand-maintained parallel list.
 
 - Tools are thin wrappers around the Google API clients — no business logic
   in the tool layer; reasoning belongs in graph nodes / prompts.
@@ -131,12 +142,23 @@ conflict-detection and chat-menu nodes that use them exist (Task 7/8).
 - `tests/test_tools.py`: mock the Google API clients (no live network calls
   in unit tests) — verify tool functions parse/shape data correctly.
 - `tests/test_graph.py`: run the compiled LangGraph app against fixture
-  state (not live APIs) and assert on graph wiring/state shape.
-- `tests/test_conflicts.py`: exercise `detect_conflicts` (deterministic
+  state (not live APIs) and assert on graph wiring/state shape — since
+  Task 8, `graph.py` is wiring only, so this file stays scoped to node/edge
+  structure, not node internals.
+- `tests/test_detection.py` (Task 8 renames `tests/test_conflicts.py` to
+  match the `detection.py` split): exercise `detect_actions` (deterministic
   overlap/back-to-back math, plus the LLM-assisted email patterns with
   `_analyze_email` mocked — no live Anthropic calls in the automated suite,
   same "no live API calls" rule as the Google clients) against fixture data
   loaded from the real `seed_data/*.yaml`, not hand-duplicated lookalikes.
+- `tests/test_resolution.py` (Task 8): the `agent`/`tools` loop against a
+  mocked `ChatAnthropic.bind_tools(...)` response — assert the right tool
+  is called with the right (id-bearing) args, and that the loop terminates
+  once the mocked response stops returning tool calls.
+- `tests/test_review.py` (Task 8): deterministic tests only — the
+  exit-vs-continue routing on a fixed set of reply phrases, and the
+  collision-annotation helper against synthetic overlapping/non-overlapping
+  `EventProposal` fixtures. No LLM involved in this file.
 - No coverage percentage target for a portfolio project of this size;
   prioritize covering the conflict-detection logic and tool-parsing edges
   over exhaustive coverage.
@@ -158,26 +180,39 @@ conflict-detection and chat-menu nodes that use them exist (Task 7/8).
   `credentials.json`; auto-send emails or auto-book events without a human
   approval step; deploy this publicly/hosted (local-only per intent doc).
 
-## Conflict Response Behavior
+## Action Resolution Behavior
 
 Milestone 1 does not prescribe per-pattern draft content (i.e. no fixed
 template like "for a calendar-calendar overlap, always draft X"). Instead,
-once `detect_conflicts` finds a conflict, the agent presents it in a chat
-turn and offers the human a menu:
+once `detect_actions` finds action items, the agent resolves all of them in
+one autonomous pass, using its own judgment about which tool applies to
+which item, before presenting a single summary:
 
-1. **Shift the slot** — calls `propose_event(...)`, producing a structured
-   `EventProposal`. Never calls Calendar's `insert`/`patch`.
-2. **Draft a reply email** — calls `draft_reply(...)`, producing a Gmail
-   draft via `drafts.create`. Never calls `send`.
-3. **Skip** — no tool call; the conflict is left unresolved for this run.
+- **`propose_event(...)`** — used both to shift an existing event
+  (`existing_event_id` set) and to accept a meeting request as a new event
+  (`existing_event_id` omitted). Produces a structured `EventProposal`.
+  Never calls Calendar's `insert`/`patch`.
+- **`draft_reply(...)`** — produces a Gmail draft via `drafts.create`. Never
+  calls `send`.
+- **Skip** — the agent simply doesn't call a tool for that item, and says so
+  in its summary if there's a reason worth surfacing.
 
-The human's choice determines the action; the agent does not unilaterally
-author and present a single draft for approve/reject. Both menu actions
-(1 and 2) are propose-only, matching the tool-layer boundary already
-enforced in `tools.py` — no write-capable tool (`patch`/`update`/`send`) is
-in scope for milestone 1. Actually applying a slot shift or sending a
-drafted email is deferred to a later milestone, gated behind its own
-human-in-the-loop confirmation.
+Tool calls execute immediately as the agent decides to make them — there is
+no pre-execution approval gate, because both tools are already propose-only
+by construction (see Boundaries). The human reviews the *result*, not each
+individual decision: once the agent has acted on everything it can, it
+presents one summary, and the human can request corrections
+conversationally (e.g. "move Client Sync to 2pm instead"). The agent
+retains full memory of what it already did, so a correction is resolved
+against its own prior tool call rather than treated as an unrelated new
+request. If the agent is genuinely unsure how to handle an item, it asks
+directly instead of guessing, in that same summary-and-reply turn.
+
+This is a deliberate change from an earlier "human picks a remedy from a
+fixed menu per conflict" design (see Open Questions): that design gated
+every decision behind pre-approval, which added interaction friction
+without adding real safety — the propose-only tool boundary is already the
+actual safety guarantee, not the human's pre-approval step.
 
 ## Success Criteria
 
@@ -187,11 +222,15 @@ human-in-the-loop confirmation.
 - [ ] `uv run python -m agentic_secretary.cli` opens a chat session against
       the seeded account: the agent greets the user, the user asks it to
       check for conflicts, the agent fetches emails/calendar, detects the
-      seeded conflict, and presents a remedy menu (shift slot / draft email
-      / skip) per the Conflict Response Behavior above.
-- [ ] No action (send/create) happens without an explicit human menu choice
-      in the chat flow, and even a chosen remedy only ever produces a
-      proposal (draft or structured event), never a send/insert/patch call.
+      seeded action items, and resolves them autonomously (proposing event
+      shifts/new events or drafting replies as appropriate) before
+      presenting one summary for review, per the Action Resolution Behavior
+      above.
+- [ ] No tool the agent calls ever sends an email or creates/patches a
+      calendar event — every resolution only ever produces a proposal
+      (draft or structured event, never a send/insert/patch call) — and the
+      human reviews the full set of resolutions each run before ending the
+      session.
 - [ ] A LangSmith trace exists for the run and shows the node-by-node
       reasoning path.
 - [ ] `uv run pytest` passes, covering tool-parsing and conflict-detection
@@ -217,6 +256,10 @@ client vs. internal meeting importance) are out of scope for milestone 1.
 None outstanding. Resolved: lint/format tool is Ruff; LangGraph checkpointer
 is in-memory for milestone 1 (resets each CLI run — revisit if a later demo
 wants to show resuming a paused/interrupted session); milestone 1 entry
-point is a chat loop rather than a fixed no-input pipeline, and conflict
-response is a human-chosen remedy via menu rather than a bot-authored draft
-per conflict pattern (see Conflict Response Behavior above).
+point is a chat loop rather than a fixed no-input pipeline. Action
+resolution was originally spec'd as a human-chosen remedy via menu per
+conflict; revised 2026-07-15 to autonomous-resolution-with-review (see
+Action Resolution Behavior above) after Task 8 prototyping showed the
+menu's per-decision pre-approval gate added interaction friction without
+adding real safety beyond what the propose-only tool boundary already
+guarantees.

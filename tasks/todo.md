@@ -21,10 +21,19 @@ against mocks (no live calls in the test suite).
 ## Phase 3: Agent Reasoning
 - [x] Task 6: PlannerState + graph skeleton
 - [x] Task 7: Conflict-detection node
-- [ ] Task 8: Draft-response node + human-review interrupt
+- [ ] Task 8: Autonomous resolution + review interrupt
+  - [ ] Task 8.0: Detection-layer typing foundation (`ActionNeeded` union)
+  - [ ] Task 8.1: `@tool`-annotate `propose_event`/`draft_reply`
+  - [ ] Task 8.2: `agent` + `tools` loop
+  - [ ] Task 8.3: `review` node (interrupt + routing)
+  - [ ] Task 8.4: Deterministic collision annotation
+  - [ ] Task 8.5: Graph wiring + CLI
+  - [ ] Task 8.6: System prompt
+  - [ ] Task 8.7: Live verification
 
-**Checkpoint:** end-to-end CLI run detects seeded conflicts, drafts a
-response, pauses for human confirmation; conflict-pattern tests pass.
+**Checkpoint:** end-to-end CLI run detects seeded action items, resolves
+them autonomously (proposals/drafts as appropriate), presents one review
+summary; conflict-pattern tests pass.
 
 ## Phase 4: Observability and Polish
 - [ ] Task 9: LangSmith tracing verification
