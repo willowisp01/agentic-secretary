@@ -1,4 +1,5 @@
 import base64
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
@@ -169,6 +170,14 @@ def make_draft_reply_tool(service: Resource) -> BaseTool:
     can't supply (it isn't JSON-schema-able), so it's captured via closure
     rather than exposed as a tool argument.
     """
+    # LangGraph's ToolNode executes multiple tool calls from one AIMessage
+    # concurrently via a thread pool -- e.g. the agent drafting replies to
+    # two different emails in the same turn. googleapiclient's Resource
+    # objects aren't thread-safe (live-discovered: concurrent draft_reply
+    # calls sharing one service instance corrupted the TLS connection --
+    # "SSL: WRONG_VERSION_NUMBER"). Serialize actual calls through this
+    # service instance rather than relying on ToolNode to run sequentially.
+    lock = threading.Lock()
 
     @tool
     def draft_reply_tool(
@@ -179,7 +188,8 @@ def make_draft_reply_tool(service: Resource) -> BaseTool:
         reschedule. Never sends; only prepares a Gmail draft for human
         review.
         """
-        return draft_reply(service, to, subject, body, thread_id)
+        with lock:
+            return draft_reply(service, to, subject, body, thread_id)
 
     return draft_reply_tool
 

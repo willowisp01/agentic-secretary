@@ -1,4 +1,6 @@
 import base64
+import threading
+import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -219,6 +221,48 @@ def test_draft_reply_tool_binds_to_the_given_service_instance():
 
     assert draft_reply_tool.name == "draft_reply_tool"
     assert draft_reply_tool.description
+
+
+def test_draft_reply_tool_serializes_concurrent_calls():
+    # Live-discovered bug: LangGraph's ToolNode runs multiple tool calls
+    # from one AIMessage concurrently via a thread pool (e.g. the agent
+    # drafting replies to two different emails in the same turn).
+    # googleapiclient's Resource objects aren't thread-safe -- concurrent
+    # calls sharing one service instance corrupted the real TLS connection
+    # ("SSL: WRONG_VERSION_NUMBER"). This proves the tool's internal lock
+    # actually serializes execution rather than letting them interleave.
+    call_log: list[tuple[str, int]] = []
+    service = MagicMock()
+
+    def slow_execute():
+        call_log.append(("start", threading.get_ident()))
+        time.sleep(0.05)
+        call_log.append(("end", threading.get_ident()))
+        return {"id": "draft1", "message": {"id": "m2", "threadId": "t1"}}
+
+    service.users.return_value.drafts.return_value.create.return_value.execute.side_effect = (
+        slow_execute
+    )
+    draft_reply_tool = make_draft_reply_tool(service)
+
+    def call() -> None:
+        draft_reply_tool.invoke(
+            {"to": "a@example.com", "subject": "s", "body": "b", "thread_id": "t1"}
+        )
+
+    threads = [threading.Thread(target=call) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(call_log) == 6
+    # If serialized, each "start" is immediately followed by its own
+    # "end" (same thread) before any other thread's "start" appears --
+    # never two "start"s back to back.
+    for i in range(0, len(call_log), 2):
+        assert call_log[i][0] == "start"
+        assert call_log[i + 1] == ("end", call_log[i][1])
 
     result = draft_reply_tool.invoke(
         {
