@@ -23,6 +23,11 @@ dev = [
     "ruff",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "llm_eval: hits a real Anthropic API and costs money; excluded from CI by default",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

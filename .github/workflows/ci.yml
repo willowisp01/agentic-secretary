@@ -18,6 +18,6 @@ jobs:
 
       - run: uv sync
 
-      - run: uv run pytest
+      - run: uv run pytest -m "not llm_eval"
 
       - run: uv run ruff check .
