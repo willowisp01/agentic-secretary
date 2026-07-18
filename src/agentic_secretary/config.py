@@ -26,6 +26,8 @@ DEMO_TIMEZONE = timezone(timedelta(hours=8))
 class Settings:
     anthropic_api_key: str | None
     langsmith_api_key: str | None
+    langsmith_tracing: bool
+    langsmith_project: str | None
     google_client_secret_path: str
     google_token_path: str
     google_seed_token_path: str
@@ -38,6 +40,13 @@ def _load_settings() -> Settings:
     return Settings(
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
         langsmith_api_key=os.getenv("LANGSMITH_API_KEY"),
+        # LANGSMITH_TRACING/LANGSMITH_API_KEY/LANGSMITH_PROJECT are also read
+        # directly by the langsmith SDK itself via os.environ (load_dotenv()
+        # above already puts them there) -- these Settings fields exist so
+        # the app's own code can check/log tracing status without duplicating
+        # env-var-parsing logic, not because the SDK needs them passed through.
+        langsmith_tracing=os.getenv("LANGSMITH_TRACING", "").lower() == "true",
+        langsmith_project=os.getenv("LANGSMITH_PROJECT"),
         google_client_secret_path=os.getenv(
             "GOOGLE_CLIENT_SECRET_PATH", "credentials.json"
         ),
