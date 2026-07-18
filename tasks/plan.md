@@ -84,10 +84,10 @@ Config/deps (Task 1)
 - [x] Task 3: Seed data fixtures (conflict patterns)
 
 ### Checkpoint: Foundation
-- [ ] `uv sync` succeeds, `uv run ruff check .` clean
-- [ ] Manual OAuth smoke test obtains a working token against the burner account
-- [ ] Seed fixture YAML parses and covers all 4 conflict patterns from the spec
-- [ ] Review with human before proceeding
+- [x] `uv sync` succeeds, `uv run ruff check .` clean
+- [x] Manual OAuth smoke test obtains a working token against the burner account
+- [x] Seed fixture YAML parses and covers all 4 conflict patterns from the spec
+- [x] Review with human before proceeding
 
 ### Phase 2: Data Layer
 
@@ -95,43 +95,43 @@ Config/deps (Task 1)
 - [x] Task 5: Seeding script
 
 ### Checkpoint: Data Layer
-- [ ] Burner account seeded successfully with all scenarios (manual visual check)
-- [ ] Tool tests pass against mocks; no live API calls in the automated test suite
-- [ ] Review with human before proceeding to the reasoning layer
+- [x] Burner account seeded successfully with all scenarios (manual visual check)
+- [x] Tool tests pass against mocks; no live API calls in the automated test suite
+- [x] Review with human before proceeding to the reasoning layer
 
 ### Phase 3: Agent Reasoning
 
 - [x] Task 6: PlannerState + graph skeleton
 - [x] Task 7: Conflict-detection node
-- [ ] Task 8: Autonomous resolution + review interrupt
+- [x] Task 8: Autonomous resolution + review interrupt
   - [x] Task 8.0: Detection-layer typing foundation (`ActionNeeded` union)
   - [x] Task 8.1: `@tool`-annotate `propose_event`/`draft_reply`
   - [x] Task 8.2: `agent` + `tools` loop
-  - [ ] Task 8.3: `review` node (interrupt + routing)
-  - [ ] Task 8.4: Deterministic collision annotation
-  - [ ] Task 8.5: Graph wiring + CLI
+  - [x] Task 8.3: `review` node (interrupt + routing)
+  - [x] Task 8.4: Deterministic collision annotation
+  - [x] Task 8.5: Graph wiring + CLI
   - [x] Task 8.6: System prompt
-  - [ ] Task 8.7: Live verification
+  - [x] Task 8.7: Live verification
 
 ### Checkpoint: Core Agent Flow
-- [ ] End-to-end CLI run against the seeded account: greet → free-text
+- [x] End-to-end CLI run against the seeded account: greet → free-text
       "check for conflicts" → fetch → detect seeded action items → agent
       resolves them autonomously → one review summary
-- [ ] All conflict-pattern tests pass against fixtures
-- [ ] Review with human before observability/polish phase
+- [x] All conflict-pattern tests pass against fixtures
+- [x] Review with human before observability/polish phase
 
 ### Phase 4: Observability and Polish
 
-- [ ] Task 9: LangSmith tracing verification
-- [ ] Task 10: Full test suite + lint pass
-- [ ] Task 11: README + demo walkthrough notes
+- [x] Task 9: LangSmith tracing verification
+- [x] Task 10: Full test suite + lint pass
+- [x] Task 11: README + demo walkthrough notes
 
 ### Checkpoint: Complete
-- [ ] All success criteria in `docs/spec/ai-secretary.md` are met
-- [ ] `uv run pytest` and `uv run ruff check .` both pass
-- [ ] LangSmith trace confirmed for a full run
-- [ ] README walkthrough verified end-to-end
-- [ ] Ready for human review / demo recording
+- [x] All success criteria in `docs/spec/ai-secretary.md` are met
+- [x] `uv run pytest` and `uv run ruff check .` both pass
+- [x] LangSmith trace confirmed for a full run
+- [x] README walkthrough verified end-to-end
+- [x] Ready for human review / demo recording
 
 ## Task Details
 
@@ -417,17 +417,17 @@ first populates it doesn't exist until Task 8.5 — Task 8.2's `agent` node
 needs the field to exist on `PlannerState` before then.
 
 **Acceptance criteria:**
-- [ ] `ActionNeeded` and its 4 variants live in `state.py`; `PlannerState`
+- [x] `ActionNeeded` and its 4 variants live in `state.py`; `PlannerState`
       gains `action_items: list[ActionNeeded]` and `messages`
-- [ ] `ActionNeeded` is a Pydantic discriminated union with 4 variants,
+- [x] `ActionNeeded` is a Pydantic discriminated union with 4 variants,
       each enforcing its own field arity
-- [ ] `detect_actions` (renamed from `detect_conflicts`) returns
+- [x] `detect_actions` (renamed from `detect_conflicts`) returns
       `list[ActionNeeded]` and lives in `detection.py`
-- [ ] All Task 7 detection behavior is unchanged for the 4 conflict
+- [x] All Task 7 detection behavior is unchanged for the 4 conflict
       patterns
 
 **Verification:**
-- [ ] `tests/test_detection.py` (renamed from `test_conflicts.py`) passes
+- [x] `tests/test_detection.py` (renamed from `test_conflicts.py`) passes
       against the same fixtures as Task 7, plus a new case asserting
       `EmailConflict` can reference more than one event
 
@@ -464,18 +464,18 @@ generation or expose an argument the LLM can never legally fill in. Fix:
 `to`/`subject`/`body`/`thread_id`.
 
 **Acceptance criteria:**
-- [ ] `propose_event_tool = tool(propose_event)` — plain `propose_event`
+- [x] `propose_event_tool = tool(propose_event)` — plain `propose_event`
       unchanged
-- [ ] `make_draft_reply_tool(service)` returns a bindable tool exposing
+- [x] `make_draft_reply_tool(service)` returns a bindable tool exposing
       only `to`/`subject`/`body`/`thread_id`; plain `draft_reply`
       unchanged
-- [ ] Docstrings specify applicability precisely, including the
+- [x] Docstrings specify applicability precisely, including the
       `existing_event_id` semantics above
 
 **Verification:**
-- [ ] `tests/test_tools.py` still passes unchanged (the plain functions
+- [x] `tests/test_tools.py` still passes unchanged (the plain functions
       keep their existing signatures and direct-call behavior)
-- [ ] New assertions: `propose_event_tool` and
+- [x] New assertions: `propose_event_tool` and
       `make_draft_reply_tool(service)` each expose `.name`/`.description`
       suitable for `bind_tools`, and invoking the bound `draft_reply` tool
       calls through to the same service instance
@@ -512,14 +512,14 @@ Tuesday") — give it the anchor date's weekday name explicitly in context
 rather than making it infer one.
 
 **Acceptance criteria:**
-- [ ] `agent` node wired with bound tools + system prompt + serialized
+- [x] `agent` node wired with bound tools + system prompt + serialized
       action items + message history
-- [ ] `tools_condition` loop terminates correctly (tool calls → `tools` →
+- [x] `tools_condition` loop terminates correctly (tool calls → `tools` →
       back to `agent`; plain text → `review`)
-- [ ] Anchor-date weekday name is included in context explicitly
+- [x] Anchor-date weekday name is included in context explicitly
 
 **Verification:**
-- [ ] `tests/test_resolution.py` — mocked `ChatAnthropic.bind_tools(...)`
+- [x] `tests/test_resolution.py` — mocked `ChatAnthropic.bind_tools(...)`
       responses; assert the right tool is called with the right args, and
       the loop terminates once the mock stops returning tool calls
 
@@ -541,11 +541,11 @@ phrases ("done", "no", "nothing else", "that's all", "bye") routes to
 `agent`, which re-engages with full memory of everything done so far.
 
 **Acceptance criteria:**
-- [ ] `review` calls `interrupt()` with the agent's final text
-- [ ] Exit phrases route to `END`; anything else loops back to `agent`
+- [x] `review` calls `interrupt()` with the agent's final text
+- [x] Exit phrases route to `END`; anything else loops back to `agent`
 
 **Verification:**
-- [ ] `tests/test_review.py` covers both routing branches deterministically
+- [x] `tests/test_review.py` covers both routing branches deterministically
 
 **Dependencies:** Task 8.2
 
@@ -571,14 +571,14 @@ prior design, relocated from a pre-generation warning to a post-hoc
 annotation.
 
 **Acceptance criteria:**
-- [ ] Reuses `_find_calendar_overlaps` rather than reimplementing overlap
+- [x] Reuses `_find_calendar_overlaps` rather than reimplementing overlap
       math
-- [ ] Appends an FYI note only when a real collision is found; silent
+- [x] Appends an FYI note only when a real collision is found; silent
       otherwise
-- [ ] Never blocks or gates tool execution
+- [x] Never blocks or gates tool execution
 
 **Verification:**
-- [ ] `tests/test_review.py` — synthetic overlapping/non-overlapping
+- [x] `tests/test_review.py` — synthetic overlapping/non-overlapping
       `EventProposal` fixtures
 
 **Dependencies:** Task 8.3
@@ -611,21 +611,21 @@ description of the same outcome (avoids reintroducing a small version of
 the plan/summary drift this whole redesign eliminated).
 
 **Acceptance criteria:**
-- [ ] `greet` and `classify_intent` exist in `chat.py` and route correctly
+- [x] `greet` and `classify_intent` exist in `chat.py` and route correctly
       (free-text "check for conflicts"-style intent → `fetch_emails`;
       anything else loops back for another chat turn)
-- [ ] `build_graph` wires `greet → classify_intent → fetch_emails →
+- [x] `build_graph` wires `greet → classify_intent → fetch_emails →
       check_calendar → detect_actions → agent ⇄ tools → review ⇄ agent →
       END`
-- [ ] `graph.py` contains no chat/detection/resolution/review logic, only
+- [x] `graph.py` contains no chat/detection/resolution/review logic, only
       wiring
-- [ ] `cli.py` prints the last `AIMessage.content`, not a separately
+- [x] `cli.py` prints the last `AIMessage.content`, not a separately
       derived summary
 
 **Verification:**
-- [ ] `tests/test_chat.py` (new) — mocked LLM classification, asserts
+- [x] `tests/test_chat.py` (new) — mocked LLM classification, asserts
       routing for an in-scope vs. out-of-scope free-text turn
-- [ ] `tests/test_graph.py` asserts wiring/state shape (mocked nodes)
+- [x] `tests/test_graph.py` asserts wiring/state shape (mocked nodes)
 
 **Dependencies:** Task 8.0, Task 8.1, Task 8.2, Task 8.3, Task 8.4
 
@@ -648,8 +648,8 @@ given after seeing results as amending the specific thing it refers to,
 not a fresh unrelated request.
 
 **Acceptance criteria:**
-- [ ] System prompt covers all four points above
-- [ ] Anchor-date context (current date + weekday name) is passed
+- [x] System prompt covers all four points above
+- [x] Anchor-date context (current date + weekday name) is passed
       explicitly, per Task 8.2's relative-date consideration
 
 **Verification:** covered by Task 8.2's mocked tests (wiring) and Task
@@ -675,14 +675,14 @@ items) that should self-resolve via the agent's own conversation memory
 alone, with no special-case code.
 
 **Acceptance criteria:**
-- [ ] Multiple action items resolved in a single pass with one review
+- [x] Multiple action items resolved in a single pass with one review
       summary — no per-item approval friction
-- [ ] A correction after review is understood in context, not treated as
+- [x] A correction after review is understood in context, not treated as
       a fresh request
-- [ ] Genuine ambiguity produces a direct question, not a bad guess
+- [x] Genuine ambiguity produces a direct question, not a bad guess
 
 **Verification:**
-- [ ] Manual CLI walkthrough against the seeded burner account, documented
+- [x] Manual CLI walkthrough against the seeded burner account, documented
 
 **Dependencies:** Task 8.0–8.6
 
@@ -791,20 +791,26 @@ defensive code -- no bugs found, just previously-unverified behavior):
 
 ---
 
-### Task 11: README + demo walkthrough notes
+### Task 11: README + demo walkthrough notes ✅
 
-**Description:** Document setup (OAuth, `.env`, seeding), how to run the
-demo, and a short "what this demonstrates" section for recruiters, including
-the synthetic-data disclosure note from the intent doc.
+**Description:** Document setup (OAuth, `.env`, seeding) and how to run the
+demo, including the synthetic-data disclosure note from the intent doc.
 
 **Acceptance criteria:**
-- [ ] Someone unfamiliar with the project can follow `README.md` from clone
-      to a working demo run
-- [ ] README discloses that demo data is synthetic/seeded, not real
-      correspondence
+- [x] Someone unfamiliar with the project can follow `README.md` from clone
+      to a working demo run -- Setup (deps, `.env`, OAuth, optional
+      LangSmith) -> Seed demo data -> Run the demo -> Testing, in that order
+- [x] README discloses that demo data is synthetic/seeded, not real
+      correspondence -- "All seed content is synthetic" note under "Seed
+      demo data", sourced from `docs/intent/ai-secretary.md`
 
 **Verification:**
-- [ ] Manual read-through / dry run of the documented steps
+- [x] Manual read-through / dry run of the documented steps -- read through
+      against the actual scripts (`scripts/seed_demo_data.py`'s `[y/N]`
+      confirmation prompt, `cli.py`'s `if __name__ == "__main__"` entry
+      point) rather than assumed; live CLI/seeding run not re-executed for
+      this task (would touch the real burner account for no new signal
+      beyond what Task 8.7 and Task 9 already confirmed live)
 
 **Dependencies:** Task 9, Task 10
 

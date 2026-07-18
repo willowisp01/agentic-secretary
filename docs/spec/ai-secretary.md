@@ -220,25 +220,29 @@ actual safety guarantee, not the human's pre-approval step.
 
 ## Success Criteria
 
-- [ ] `uv run python scripts/seed_demo_data.py` populates the burner Gmail +
+- [x] `uv run python scripts/seed_demo_data.py` populates the burner Gmail +
       Calendar with the seeded synthetic scenarios (including at least one
       deliberate time conflict, per the conflict-seeding patterns below).
-- [ ] `uv run python -m agentic_secretary.cli` opens a chat session against
+- [x] `uv run python -m agentic_secretary.cli` opens a chat session against
       the seeded account: the agent greets the user, the user asks it to
       check for conflicts, the agent fetches emails/calendar, detects the
       seeded action items, and resolves them autonomously (proposing event
       shifts/new events or drafting replies as appropriate) before
       presenting one summary for review, per the Action Resolution Behavior
       above.
-- [ ] No tool the agent calls ever sends an email or creates/patches a
+- [x] No tool the agent calls ever sends an email or creates/patches a
       calendar event — every resolution only ever produces a proposal
       (draft or structured event, never a send/insert/patch call) — and the
       human reviews the full set of resolutions each run before ending the
       session.
-- [ ] A LangSmith trace exists for the run and shows the node-by-node
+- [x] A LangSmith trace exists for the run and shows the node-by-node
       reasoning path.
-- [ ] `uv run pytest` passes, covering tool-parsing and conflict-detection
-      logic against fixture data (no live API calls in the test suite).
+- [x] `uv run pytest` passes, covering tool-parsing and conflict-detection
+      logic against fixture data (no live API calls in the test suite) --
+      run as `uv run pytest -m "not llm_eval"`, the marker that excludes
+      the one test file that does make live Anthropic calls by design
+      (`tests/test_agent_examples_eval.py`, a separate eval suite, not part
+      of this criterion's "no live API calls" scope).
 
 ## Seed Data — Conflict Patterns (Milestone 1 scope: time conflicts only)
 

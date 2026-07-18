@@ -1,4 +1,4 @@
-# Task List: AI Secretary — Milestone 1 (Planner)
+# Task List: AI Secretary — Milestone 1 (Planner) ✅ Complete
 
 Full detail (acceptance criteria, verification, files, dependencies) in
 [`tasks/plan.md`](plan.md). This file tracks status only.
@@ -36,9 +36,9 @@ them autonomously (proposals/drafts as appropriate), presents one review
 summary; conflict-pattern tests pass.
 
 ## Phase 4: Observability and Polish
-- [ ] Task 9: LangSmith tracing verification
-- [ ] Task 10: Full test suite + lint pass
-- [ ] Task 11: README + demo walkthrough notes
+- [x] Task 9: LangSmith tracing verification
+- [x] Task 10: Full test suite + lint pass
+- [x] Task 11: README + demo walkthrough notes
 
 **Checkpoint (final):** all spec success criteria met, tests + lint pass,
 LangSmith trace confirmed, README walkthrough verified — ready for demo
@@ -48,4 +48,4 @@ recording.
 - [x] Google Cloud project + OAuth client created, Gmail + Calendar APIs
       enabled
 - [x] Burner Gmail/Calendar account ready and accessible
-- [ ] `ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY` available for `.env`
+- [x] `ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY` available for `.env`
