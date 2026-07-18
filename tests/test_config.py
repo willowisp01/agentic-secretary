@@ -17,6 +17,8 @@ def test_default_agent_model_name_is_sonnet():
 def test_settings_expose_required_fields():
     assert hasattr(settings, "anthropic_api_key")
     assert hasattr(settings, "langsmith_api_key")
+    assert hasattr(settings, "langsmith_tracing")
+    assert hasattr(settings, "langsmith_project")
     assert hasattr(settings, "google_client_secret_path")
     assert hasattr(settings, "google_token_path")
     assert hasattr(settings, "google_seed_token_path")

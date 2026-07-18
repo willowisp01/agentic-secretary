@@ -692,24 +692,62 @@ alone, with no special-case code.
 
 ---
 
-### Task 9: LangSmith tracing verification
+### Task 9: LangSmith tracing verification ✅
 
 **Description:** Wire `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`,
 `LANGCHAIN_PROJECT` via `config.py`/`.env`, and confirm a CLI run produces a
 visible trace in the LangSmith UI showing the full node path.
 
+Note: those are the pre-rebrand env var names -- the actual LangSmith SDK
+uses `LANGSMITH_TRACING`/`LANGSMITH_API_KEY`/`LANGSMITH_PROJECT` (and
+optionally `LANGSMITH_ENDPOINT` for self-hosted/regional deployments), which
+is what got wired.
+
 **Acceptance criteria:**
-- [ ] A documented CLI run appears in the LangSmith project dashboard with
-      all graph nodes visible in the trace
+- [x] A documented CLI run appears in the LangSmith project dashboard with
+      all graph nodes visible in the trace -- confirmed live: a real CLI
+      run's trace showed the full `greet` -> `classify_intent` ->
+      `fetch_emails` -> `check_calendar` -> `detect_actions` node path
+      (Turn 17 of an ongoing thread), each with its own nested
+      `ChatAnthropic` calls. Documented in README.md's "LangSmith tracing"
+      section.
 
 **Verification:**
-- [ ] Manual check in the LangSmith UI
+- [x] Manual check in the LangSmith UI
 
 **Dependencies:** Task 8
 
 **Files likely touched:** `src/agentic_secretary/config.py`, `README.md`
 
 **Estimated scope:** Small
+
+**Beyond scope -- eval dataset built on top of this:** the original task
+only asked for tracing wiring/verification, but while working through it we
+also built a real LangSmith eval suite around `resolution.agent()`:
+
+- `evals/agent_examples.py` -- 8 hand-authored single-step examples, each
+  scripting either a first-turn `action_items` list or a full prior-turn
+  message history for scenarios needing context, plus a structured
+  `expected` block per example.
+- `tests/test_agent_examples.py` -- mocked, free, CI-safe check that every
+  example is well-formed and `agent()` runs on it without raising.
+- `tests/test_agent_examples_eval.py` -- runs the real thing against
+  Claude, marked `llm_eval` and excluded from CI (costs real API calls).
+  Combines two evaluation layers on every run:
+  - **Code-based evals**: deterministic checks (`tool_calls_include`,
+    `content_must_not_contain`) for properties that have an objectively
+    correct answer.
+  - **LLM-as-a-judge eval**: a LangSmith-bound evaluator (`agent-evaluator`,
+    feedback key `satisfies-rubric`) scores each example's `rubric` field --
+    the softer, judgment-call properties a fixed assertion can't capture
+    (e.g. "asked a clarifying question instead of guessing"). Synced
+    automatically via `@pytest.mark.langsmith` on every test run, no
+    separate dataset-upload step.
+  - **Alignment loop**: the judge's prompt was refined after a live
+    disagreement (a false negative on an "acknowledge without overclaiming"
+    case) surfaced a real gap in its instructions -- confirmed fixed by
+    re-running the full sample and checking agreement, not just trusting
+    the fix.
 
 ---
 
