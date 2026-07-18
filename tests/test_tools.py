@@ -95,6 +95,47 @@ def test_list_recent_emails_extracts_body_from_multipart_message():
     assert emails[0].body == "Are you free?"
 
 
+def test_list_recent_emails_returns_empty_body_when_no_plain_text_part_exists():
+    # _extract_plain_text_body recurses through `parts` looking for a
+    # text/plain leaf; an HTML-only message has none anywhere in the tree.
+    # It should return "" rather than raise or return None.
+    service = MagicMock()
+    messages = service.users.return_value.messages.return_value
+    messages.list.return_value.execute.return_value = {
+        "messages": [{"id": "m1", "threadId": "t1"}]
+    }
+    messages.get.return_value.execute.return_value = {
+        "id": "m1",
+        "threadId": "t1",
+        "internalDate": "1700000000000",
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [
+                {"name": "From", "value": "alex@example.com"},
+                {"name": "To", "value": "you@example.com"},
+                {"name": "Subject", "value": "Quick sync tomorrow?"},
+            ],
+            "parts": [
+                {
+                    "mimeType": "text/html",
+                    "body": {"data": _b64("<p>Are you free?</p>")},
+                },
+            ],
+        },
+    }
+
+    emails = list_recent_emails(service)
+
+    assert emails[0].body == ""
+
+
+def test_list_recent_emails_returns_empty_list_for_an_empty_inbox():
+    service = MagicMock()
+    service.users.return_value.messages.return_value.list.return_value.execute.return_value = {}
+
+    assert list_recent_emails(service) == []
+
+
 def test_list_upcoming_events_parses_timed_and_all_day_events():
     service = MagicMock()
     service.events.return_value.list.return_value.execute.return_value = {
@@ -140,6 +181,13 @@ def test_list_upcoming_events_parses_timed_and_all_day_events():
             end=datetime(2026, 7, 12, tzinfo=timezone.utc),
         ),
     ]
+
+
+def test_list_upcoming_events_returns_empty_list_for_an_empty_calendar():
+    service = MagicMock()
+    service.events.return_value.list.return_value.execute.return_value = {}
+
+    assert list_upcoming_events(service) == []
 
 
 def test_draft_reply_creates_draft_and_never_sends():

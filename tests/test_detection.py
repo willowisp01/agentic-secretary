@@ -7,6 +7,7 @@ from agentic_secretary.detection import (
     _correct_proposed_start_offset,
     _EmailIntent,
     _find_back_to_back,
+    _find_calendar_overlaps,
     detect_actions,
 )
 from agentic_secretary.tools import CalendarEvent, EmailSummary
@@ -122,6 +123,67 @@ def test_find_back_to_back_still_flags_a_gap_just_under_the_threshold():
     assert len(conflicts) == 1
 
 
+def test_find_calendar_overlaps_does_not_flag_events_that_only_touch():
+    # Boundary case for the overlap check itself (a.start < b.end and
+    # b.start < a.end, both strict): an event ending exactly when the next
+    # one starts shares no actual overlapping time -- that's back-to-back
+    # territory (a separate, softer signal), not a hard overlap.
+    early = CalendarEvent(
+        id="e1", title="Standup", start=NOW, end=NOW + timedelta(minutes=30)
+    )
+    late = CalendarEvent(
+        id="e2",
+        title="Client Call",
+        start=NOW + timedelta(minutes=30),
+        end=NOW + timedelta(minutes=60),
+    )
+
+    assert _find_calendar_overlaps([early, late]) == []
+
+
+def test_find_calendar_overlaps_finds_every_pairwise_overlap_among_three_events():
+    a = CalendarEvent(id="e1", title="A", start=NOW, end=NOW + timedelta(minutes=60))
+    b = CalendarEvent(
+        id="e2",
+        title="B",
+        start=NOW + timedelta(minutes=15),
+        end=NOW + timedelta(minutes=45),
+    )
+    c = CalendarEvent(
+        id="e3",
+        title="C",
+        start=NOW + timedelta(minutes=30),
+        end=NOW + timedelta(minutes=90),
+    )
+
+    conflicts = _find_calendar_overlaps([a, b, c])
+
+    pairs = {frozenset(e.id for e in conflict.events) for conflict in conflicts}
+    assert pairs == {
+        frozenset({"e1", "e2"}),
+        frozenset({"e1", "e3"}),
+        frozenset({"e2", "e3"}),
+    }
+
+
+def test_find_back_to_back_does_not_also_flag_events_that_actually_overlap():
+    # _find_calendar_overlaps already reports genuinely overlapping events;
+    # _find_back_to_back should stay silent on the same pair rather than
+    # also flagging it as "no buffer" -- a negative gap (b starts before a
+    # ends) means they overlap, not merely touch.
+    early = CalendarEvent(
+        id="e1", title="Standup", start=NOW, end=NOW + timedelta(minutes=45)
+    )
+    late = CalendarEvent(
+        id="e2",
+        title="Client Call",
+        start=NOW + timedelta(minutes=15),
+        end=NOW + timedelta(minutes=60),
+    )
+
+    assert _find_back_to_back([early, late]) == []
+
+
 def test_detect_actions_no_false_positive_for_well_spaced_events():
     state = {
         "emails": [],
@@ -219,6 +281,28 @@ def test_detect_actions_finds_reschedule_request(mock_analyze):
 
     kinds = {a.kind for a in result["action_items"]}
     assert "reschedule" in kinds
+
+
+@patch("agentic_secretary.detection._analyze_email")
+def test_detect_actions_skips_reschedule_referencing_an_unknown_event_id(mock_analyze):
+    # Defensive-code gap: `references_event_id in events_by_id` guards
+    # against the LLM naming an event id that isn't actually on the
+    # calendar. Prove it's silently skipped rather than raising KeyError.
+    mock_analyze.return_value = _EmailIntent(
+        proposes_new_meeting=False,
+        requests_reschedule=True,
+        references_event_id="evt_does_not_exist",
+    )
+    state = {
+        "emails": [RESCHEDULE_EMAIL],
+        "calendar_events": [CLIENT_CALL],
+        "action_items": [],
+        "status": "done",
+    }
+
+    result = detect_actions(state)
+
+    assert result["action_items"] == []
 
 
 @patch("agentic_secretary.detection._analyze_email")

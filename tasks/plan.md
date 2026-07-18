@@ -751,18 +751,37 @@ also built a real LangSmith eval suite around `resolution.agent()`:
 
 ---
 
-### Task 10: Full test suite + lint pass
+### Task 10: Full test suite + lint pass ✅
 
 **Description:** Close any remaining test gaps (tool edge cases, additional
 conflict false-positive/negative cases) and run Ruff format + check across
 the repo.
 
+Closed 7 genuine coverage gaps (all characterization tests on already-correct
+defensive code -- no bugs found, just previously-unverified behavior):
+- `tools.py`: `_extract_plain_text_body` returns `""` for an HTML-only email
+  (no `text/plain` part anywhere in the tree); `list_recent_emails`/
+  `list_upcoming_events` return `[]` cleanly for an empty inbox/calendar.
+- `detection.py`: `_find_calendar_overlaps` doesn't flag events that only
+  touch at the boundary (false-positive guard, the overlap-side analog of
+  the existing back-to-back threshold tests) and correctly finds every
+  pairwise overlap among three mutually-overlapping events;
+  `_find_back_to_back` doesn't also flag a pair that's genuinely
+  overlapping (would be a confusing duplicate signal alongside the overlap
+  conflict); `detect_actions` silently skips (doesn't raise `KeyError` on)
+  a reschedule request whose `references_event_id` doesn't match any real
+  calendar event.
+
 **Acceptance criteria:**
-- [ ] `uv run pytest` passes with no failures
-- [ ] `uv run ruff check .` passes with no errors
+- [x] `uv run pytest -m "not llm_eval"` passes with no failures (114 passed)
+      -- matches what CI actually runs; the literal `uv run pytest` would
+      also attempt `tests/test_agent_examples_eval.py`'s real Anthropic
+      calls, which are deliberately excluded from routine runs (see Task 9's
+      beyond-scope section) and weren't re-run just for this task
+- [x] `uv run ruff check .` passes with no errors
 
 **Verification:**
-- [ ] Both commands exit `0`
+- [x] Both commands exit `0`
 
 **Dependencies:** Tasks 4-8
 
