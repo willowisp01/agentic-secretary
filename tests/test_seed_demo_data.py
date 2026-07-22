@@ -17,7 +17,9 @@ from seed_demo_data import (
 NOW = datetime(2026, 7, 10, 15, 0, tzinfo=timezone.utc)
 SEED_DATA_DIR = Path(__file__).resolve().parent.parent / "seed_data"
 _FIXTURE_EMAILS = {e.id: e for e in load_emails(SEED_DATA_DIR / "emails.yaml")}
-_FIXTURE_EVENTS = {e.id: e for e in load_calendar_events(SEED_DATA_DIR / "calendar_events.yaml")}
+_FIXTURE_EVENTS = {
+    e.id: e for e in load_calendar_events(SEED_DATA_DIR / "calendar_events.yaml")
+}
 
 
 def test_resolve_relative_time_offset_hours():

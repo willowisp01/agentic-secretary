@@ -72,14 +72,18 @@ def nuke(gmail_service: Resource, calendar_service: Resource) -> None:
     event_ids = list_all_event_ids(calendar_service)
     print(f"Deleting {len(event_ids)} events...")
     for event_id in event_ids:
-        calendar_service.events().delete(calendarId="primary", eventId=event_id).execute()
+        calendar_service.events().delete(
+            calendarId="primary", eventId=event_id
+        ).execute()
         print(f"  deleted {event_id}")
     print("Done.")
 
 
 def main() -> None:
     creds = load_credentials(
-        CLEANUP_SCOPES, settings.google_cleanup_token_path, settings.google_client_secret_path
+        CLEANUP_SCOPES,
+        settings.google_cleanup_token_path,
+        settings.google_client_secret_path,
     )
     gmail_service = build("gmail", "v1", credentials=creds)
     calendar_service = build("calendar", "v3", credentials=creds)

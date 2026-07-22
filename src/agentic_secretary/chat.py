@@ -29,7 +29,9 @@ def greet(state: PlannerState) -> dict:
 def classify_intent(state: PlannerState) -> str:
     last_message = state["messages"][-1]
     llm = ChatAnthropic(
-        model_name=settings.model_name, api_key=settings.anthropic_api_key, temperature=0
+        model_name=settings.model_name,
+        api_key=settings.anthropic_api_key,
+        temperature=0,
     )
     structured_llm = llm.with_structured_output(_Intent, method="json_schema")
     try:

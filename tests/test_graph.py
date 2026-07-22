@@ -300,7 +300,10 @@ def _llm_returning(*invoke_results):
 @patch("agentic_secretary.resolution.ChatAnthropic")
 @patch("agentic_secretary.chat.ChatAnthropic")
 @patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
-@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=OVERLAPPING_EVENTS)
+@patch(
+    "agentic_secretary.graph.tools.list_upcoming_events",
+    return_value=OVERLAPPING_EVENTS,
+)
 @patch("agentic_secretary.graph.tools.list_recent_emails", return_value=[])
 def test_checkpointing_a_full_resolution_round_trip_does_not_warn_about_unregistered_types(
     mock_list_emails,
@@ -316,8 +319,8 @@ def test_checkpointing_a_full_resolution_round_trip_does_not_warn_about_unregist
     # goes through the checkpointer. CalendarOverlapConflict (in
     # action_items) and EventProposal (as a ToolMessage artifact) both
     # flow through PlannerState across this round trip.
-    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = (
-        _Intent(wants_conflict_check=True)
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
     )
     tool_call_message = AIMessage(
         content="",
@@ -343,7 +346,9 @@ def test_checkpointing_a_full_resolution_round_trip_does_not_warn_about_unregist
     config = {"configurable": {"thread_id": "test"}}
 
     with caplog.at_level("WARNING"):
-        graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+        graph.invoke(
+            _INITIAL_STATE, config=config
+        )  # halts at greet's opening interrupt
         graph.invoke(Command(resume="check for conflicts"), config=config)
         # The warning fires on *deserializing* a checkpoint, not writing
         # one -- calendar_events/action_items/the EventProposal artifact

@@ -61,7 +61,10 @@ def test_real_fixtures_pass_validation():
     [
         (Relation(kind="back_to_back", events=["a", "b", "c"]), "exactly 2"),
         (Relation(kind="calendar_overlap", events=["a"]), "at least 2"),
-        (Relation(kind="email_conflict", email=None, events=["a"]), "requires an 'email'"),
+        (
+            Relation(kind="email_conflict", email=None, events=["a"]),
+            "requires an 'email'",
+        ),
         (Relation(kind="reschedule", email="e1", event=None), "requires an 'event'"),
         (Relation(kind="mentions", email="e1", event="unknown"), "unknown event"),
         (Relation(kind="not_a_real_kind"), "Unknown relation kind"),

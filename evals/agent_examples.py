@@ -136,7 +136,9 @@ _PRIOR_SUMMARY = AIMessage(
 def _scripted_continuation(*, human_reply: str) -> list:
     return [
         SystemMessage(content=resolution.SYSTEM_PROMPT),
-        HumanMessage(content="(scenario context: overlap between Standup and Client Call)"),
+        HumanMessage(
+            content="(scenario context: overlap between Standup and Client Call)"
+        ),
         _PRIOR_TOOL_CALL,
         _PRIOR_TOOL_RESULT,
         _PRIOR_SUMMARY,
@@ -164,7 +166,8 @@ _register(
                 # the agent has legitimate discretion over which one, so
                 # accept both rather than assuming it always picks e2.
                 ToolCallExpectation(
-                    name="propose_event", args_subset={"existing_event_id": {"e1", "e2"}}
+                    name="propose_event",
+                    args_subset={"existing_event_id": {"e1", "e2"}},
                 ),
             ),
             rubric="Should propose moving one of the two overlapping events to a "

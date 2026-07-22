@@ -94,7 +94,9 @@ def test_falls_back_to_consent_flow_when_refresh_token_invalid(tmp_path):
     token_path = tmp_path / "token.json"
     token_path.write_text('{"token": "cached"}')
     expired_creds = _fake_creds(valid=False, expired=True)
-    expired_creds.refresh.side_effect = RefreshError("invalid_grant: Token has been expired or revoked.")
+    expired_creds.refresh.side_effect = RefreshError(
+        "invalid_grant: Token has been expired or revoked."
+    )
     new_creds = _fake_creds()
 
     with (
