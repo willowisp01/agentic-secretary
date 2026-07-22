@@ -1,4 +1,4 @@
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -45,3 +45,9 @@ class PlannerState(TypedDict):
     calendar_events: list[tools.CalendarEvent]
     action_items: list[ActionNeeded]
     status: str
+    # Only meaningful when status == "error" -- set fresh by fetch_emails/
+    # check_calendar on every invocation (success or failure) so a stale
+    # value from an earlier turn's failure never leaks into this turn's
+    # routing decision. NotRequired since existing PlannerState literals
+    # (initial states, fixtures) predate this field and never set it.
+    error_message: NotRequired[str]

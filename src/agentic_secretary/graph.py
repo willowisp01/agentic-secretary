@@ -39,19 +39,37 @@ _CHECKPOINT_ALLOWED_TYPES = (
 
 def build_graph(gmail_service: Resource, calendar_service: Resource):
     def fetch_emails(state: PlannerState) -> dict:
-        return {"emails": tools.list_recent_emails(gmail_service)}
+        try:
+            emails = tools.list_recent_emails(gmail_service)
+        except Exception as e:
+            return {"status": "error", "error_message": str(e)}
+        return {"emails": emails, "status": "fetching"}
 
     def check_calendar(state: PlannerState) -> dict:
-        return {
-            "calendar_events": tools.list_upcoming_events(calendar_service),
-            "status": "done",
-        }
+        try:
+            events = tools.list_upcoming_events(calendar_service)
+        except Exception as e:
+            return {"status": "error", "error_message": str(e)}
+        return {"calendar_events": events, "status": "done"}
+
+    def fetch_failed(state: PlannerState) -> dict:
+        reply = interrupt(
+            "Sorry, I couldn't complete that check -- "
+            f"{state['error_message']}. Want to try again?"
+        )
+        return {"messages": [HumanMessage(content=reply)]}
 
     def no_action_items(state: PlannerState) -> dict:
         reply = interrupt(
             "I checked your calendar and inbox -- nothing to report right now."
         )
         return {"messages": [HumanMessage(content=reply)]}
+
+    def route_after_fetch_emails(state: PlannerState) -> str:
+        return "fetch_failed" if state["status"] == "error" else "check_calendar"
+
+    def route_after_check_calendar(state: PlannerState) -> str:
+        return "fetch_failed" if state["status"] == "error" else "detect_actions"
 
     def route_after_detection(state: PlannerState) -> str:
         return "agent" if state["action_items"] else "no_action_items"
@@ -60,6 +78,7 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_node("greet", greet)
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
+    builder.add_node("fetch_failed", fetch_failed)
     builder.add_node("detect_actions", detect_actions)
     builder.add_node("no_action_items", no_action_items)
     builder.add_node("agent", make_agent_node(gmail_service))
@@ -69,8 +88,17 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
     builder.add_edge(START, "greet")
     _post_greet_routes = {"fetch_emails": "fetch_emails", "greet": "greet"}
     builder.add_conditional_edges("greet", classify_intent, _post_greet_routes)
-    builder.add_edge("fetch_emails", "check_calendar")
-    builder.add_edge("check_calendar", "detect_actions")
+    builder.add_conditional_edges(
+        "fetch_emails",
+        route_after_fetch_emails,
+        {"check_calendar": "check_calendar", "fetch_failed": "fetch_failed"},
+    )
+    builder.add_conditional_edges(
+        "check_calendar",
+        route_after_check_calendar,
+        {"detect_actions": "detect_actions", "fetch_failed": "fetch_failed"},
+    )
+    builder.add_conditional_edges("fetch_failed", classify_intent, _post_greet_routes)
     builder.add_conditional_edges(
         "detect_actions",
         route_after_detection,

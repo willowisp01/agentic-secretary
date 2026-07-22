@@ -59,6 +59,7 @@ def test_planner_state_has_expected_fields():
         "calendar_events",
         "action_items",
         "status",
+        "error_message",
     }
 
 
@@ -118,6 +119,85 @@ def test_graph_invoke_returns_final_state_with_status_done(
     # so this second invoke ends at another interrupt, not a graph-complete
     # state.
     assert "__interrupt__" in result
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+@patch("agentic_secretary.graph.detect_actions")
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
+@patch(
+    "agentic_secretary.graph.tools.list_recent_emails",
+    side_effect=Exception("Gmail API is down"),
+)
+def test_fetch_emails_failure_routes_to_fetch_failed_not_check_calendar(
+    mock_list_emails, mock_list_events, mock_detect_actions, mock_chat_anthropic
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    mock_list_events.assert_not_called()
+    mock_detect_actions.assert_not_called()
+    interrupt_value = result["__interrupt__"][0].value
+    assert "Gmail API is down" in interrupt_value
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+@patch("agentic_secretary.graph.detect_actions")
+@patch(
+    "agentic_secretary.graph.tools.list_upcoming_events",
+    side_effect=Exception("Calendar API is down"),
+)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
+def test_check_calendar_failure_routes_to_fetch_failed_not_detect_actions(
+    mock_list_emails, mock_list_events, mock_detect_actions, mock_chat_anthropic
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    mock_list_emails.assert_called_once()
+    mock_detect_actions.assert_not_called()
+    interrupt_value = result["__interrupt__"][0].value
+    assert "Calendar API is down" in interrupt_value
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+@patch("agentic_secretary.graph.detect_actions")
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails")
+def test_fetch_failed_routes_to_classify_intent_not_back_through_greet(
+    mock_list_emails, mock_list_events, mock_detect_actions, mock_chat_anthropic
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
+    mock_detect_actions.return_value = {"action_items": []}
+    mock_list_emails.side_effect = [Exception("Gmail API is down"), FAKE_EMAILS]
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+    graph.invoke(
+        Command(resume="check for conflicts"), config=config
+    )  # halts at fetch_failed
+
+    # Resuming here should be treated as a fresh chat turn routed through
+    # classify_intent, not a second greet opening/reprompt -- a second
+    # "check for conflicts" should retry the fetch, not re-show greet's
+    # prompt.
+    graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    assert mock_list_emails.call_count == 2
+    mock_list_events.assert_called_once()
 
 
 @patch("agentic_secretary.chat.ChatAnthropic")

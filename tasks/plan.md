@@ -926,7 +926,7 @@ resolution.agent() failure handling ──┘
 ### Phase A: Graph UX + Atomicity
 
 - [x] Task 12: `no_action_items` node
-- [ ] Task 13: Fetch-stage atomicity (`fetch_failed`)
+- [x] Task 13: Fetch-stage atomicity (`fetch_failed`)
 
 ### Phase B: API failure handling
 
@@ -1002,26 +1002,34 @@ gets cross-referenced, avoiding a confidently-wrong result (a real conflict
 silently missed because only half the data was available).
 
 **Acceptance criteria:**
-- [ ] A `fetch_emails` failure routes to `fetch_failed`, never to
+- [x] A `fetch_emails` failure routes to `fetch_failed`, never to
       `check_calendar`
-- [ ] A `check_calendar` failure routes to `fetch_failed`, never to
+- [x] A `check_calendar` failure routes to `fetch_failed`, never to
       `detect_actions`
-- [ ] `detect_actions` is never invoked with partial (emails-only or
+- [x] `detect_actions` is never invoked with partial (emails-only or
       calendar-only) data in the same turn
-- [ ] `fetch_failed` shows a specific message and routes to
+- [x] `fetch_failed` shows a specific message and routes to
       `classify_intent` next
 
 **Verification:**
-- [ ] `tests/test_graph.py` / `tests/test_tools.py` — mocked Google API
+- [x] `tests/test_graph.py` / `tests/test_tools.py` — mocked Google API
       clients raising on `fetch_emails` and separately on `check_calendar`
       each route to `fetch_failed` and never reach `detect_actions`
 
 **Dependencies:** None
 
 **Files likely touched:** `src/agentic_secretary/graph.py`,
-`tests/test_graph.py`
+`src/agentic_secretary/state.py`, `tests/test_graph.py`
 
 **Estimated scope:** Medium
+
+**Implementation note:** Added `error_message: NotRequired[str]` to
+`PlannerState` rather than reusing `status`'s existing string for both the
+verdict and the reason. `fetch_emails`/`check_calendar` now set `status`
+fresh on every invocation (`"error"`, or `"fetching"`/`"done"` on success)
+rather than only on failure -- needed so a stale `"error"` from an earlier
+turn's failure never leaks into this turn's routing check after a
+subsequent successful fetch.
 
 ---
 
@@ -1058,31 +1066,61 @@ CLI-only project.
 
 ### Task 15: `_analyze_email` failure handling
 
-**Description:** Wrap each per-email `structured_llm.invoke(prompt)` call
-inside `detect_actions`'s loop in a plain try/except (0 retries). On
-failure for a given email, skip it (contribute no action item from it) and
-continue processing the remaining emails — same shape as the existing
-skip-on-malformed-reference precedent already in this function. No visible
-note added to the summary; the failure is silent, matching the "simplest
-thing that works" default given the lower stakes here versus Task 16
-(nothing has been drafted/proposed yet at this stage).
+**Description:** Wrap the per-email `structured_llm.invoke(prompt)` call
+(inside `_find_email_conflicts`'s loop, called from `detect_actions`) in a
+plain try/except (0 retries). On failure for a given email, skip it
+(contribute no action item from it) and continue processing the remaining
+emails — same shape as the existing skip-on-malformed-reference precedent
+already in this function.
+
+Revised from the original silent-skip design: skipping without any visible
+note has the same "confidently wrong from partial data" shape Task 13
+exists to prevent (there, a half-fetched turn never reaching
+`detect_actions`; here, a half-analyzed batch reported as if it were
+complete) — cheap enough to fix that there's no real reason to accept the
+risk. `detect_actions` collects each failing email's subject into a new
+`failed_emails: list[str]` field on `PlannerState` (`state.py`).
+`detection.py` exposes `_failed_email_note(failed_emails: list[str]) -> str
+| None` (`None` when the list is empty) so the formatting logic exists
+once, not twice. Both terminal nodes for a turn append it when present:
+`review.py`'s `review()`, alongside its existing `_collision_note()`, before
+the fixed disclaimer; and `graph.py`'s `no_action_items()`, appended to its
+otherwise-static message — covering the all-emails-failed-and-nothing-else-
+found case, which wouldn't reach `review` at all. Both already end in an
+`interrupt(...)` call whose value is what `cli.py:55` prints, so no new
+print call is needed anywhere.
 
 **Acceptance criteria:**
 - [ ] A failure classifying one email doesn't raise and doesn't stop the
       rest of the batch from being processed normally
-- [ ] The failed email contributes zero entries to `action_items`
+- [ ] The failed email contributes zero entries to `action_items`, but its
+      subject is recorded in `state["failed_emails"]`
+- [ ] `review()`'s display includes a note naming the failed email(s) when
+      `action_items` is non-empty; `no_action_items()`'s message includes
+      the same note when it is empty
+- [ ] No note is appended, in either node, when `failed_emails` is empty
 
 **Verification:**
 - [ ] `tests/test_detection.py` — a mocked `_analyze_email` call raising
       for one email in a multi-email fixture still returns correct action
-      items for the others
+      items for the others, and that email's subject appears in
+      `failed_emails`
+- [ ] `tests/test_review.py` — `review()`'s display includes the note when
+      `failed_emails` is non-empty, and omits it when empty
+- [ ] `tests/test_graph.py` — a fixture with empty `action_items` and a
+      non-empty `failed_emails` routes to `no_action_items` and its
+      interrupt value includes the note
 
-**Dependencies:** None
+**Dependencies:** None (uses the existing `no_action_items` node from Task
+12 and the existing `_collision_note`-style append pattern in `review.py`
+from Task 8.4; doesn't block on either)
 
 **Files likely touched:** `src/agentic_secretary/detection.py`,
-`tests/test_detection.py`
+`src/agentic_secretary/state.py`, `src/agentic_secretary/review.py`,
+`src/agentic_secretary/graph.py`, `tests/test_detection.py`,
+`tests/test_review.py`, `tests/test_graph.py`
 
-**Estimated scope:** Small
+**Estimated scope:** Medium
 
 ---
 
