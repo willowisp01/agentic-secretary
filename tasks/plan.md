@@ -930,7 +930,7 @@ resolution.agent() failure handling ──┘
 
 ### Phase B: API failure handling
 
-- [ ] Task 14: `classify_intent` failure handling
+- [x] Task 14: `classify_intent` failure handling
 - [ ] Task 15: `_analyze_email` failure handling
 - [ ] Task 16: `resolution.agent()` failure handling
 
@@ -1046,12 +1046,12 @@ wouldn't be visible to any future non-CLI frontend. Acceptable for this
 CLI-only project.
 
 **Acceptance criteria:**
-- [ ] A failed classification call prints a clear diagnostic line and
+- [x] A failed classification call prints a clear diagnostic line and
       falls back to routing `"greet"`, without raising
-- [ ] Formatting matches the existing interrupt-message style in `cli.py`
+- [x] Formatting matches the existing interrupt-message style in `cli.py`
 
 **Verification:**
-- [ ] `tests/test_chat.py` — a mocked `ChatAnthropic`/`invoke` raising
+- [x] `tests/test_chat.py` — a mocked `ChatAnthropic`/`invoke` raising
       results in a `"greet"` route and no unhandled exception (assert on
       the print via `capsys` or equivalent)
 

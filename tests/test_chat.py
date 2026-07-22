@@ -83,3 +83,25 @@ def test_classify_intent_routes_out_of_scope_message_back_to_greet(mock_chat_ant
     assert (
         final["__interrupt__"][0].value == 'Anything else? (e.g. "check for conflicts")'
     )
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+def test_classify_intent_failure_falls_back_to_greet_without_raising(
+    mock_chat_anthropic, capsys
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.side_effect = Exception(
+        "Anthropic API is down"
+    )
+    graph = _build_test_graph()
+    config = {"configurable": {"thread_id": "t5"}}
+    graph.invoke(_base_state(), config=config)
+
+    final = graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    assert (
+        final["__interrupt__"][0].value == 'Anything else? (e.g. "check for conflicts")'
+    )
+    printed = capsys.readouterr().out
+    assert "Anthropic API is down" in printed
+    assert printed.startswith("\n")
+    assert printed.endswith("\n\n")

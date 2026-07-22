@@ -32,8 +32,19 @@ def classify_intent(state: PlannerState) -> str:
         model_name=settings.model_name, api_key=settings.anthropic_api_key, temperature=0
     )
     structured_llm = llm.with_structured_output(_Intent, method="json_schema")
-    intent = structured_llm.invoke(
-        "Does this message ask to check for scheduling conflicts, meeting "
-        f"requests, or reschedules?\n\nMessage: {last_message.content}"
-    )
+    try:
+        intent = structured_llm.invoke(
+            "Does this message ask to check for scheduling conflicts, meeting "
+            f"requests, or reschedules?\n\nMessage: {last_message.content}"
+        )
+    except Exception as e:
+        # classify_intent is a router (returns a string, not a state
+        # update) -- it can't inject a message into state, so this is a
+        # bare terminal side effect rather than the state["messages"]
+        # pattern used everywhere else. Won't appear in a LangSmith trace
+        # or any future non-CLI frontend; accepted for this CLI-only
+        # project. Matches cli.py's own interrupt-rendering format so it
+        # doesn't look visually inconsistent.
+        print(f"\nCouldn't classify that message -- {e}\n")
+        return "greet"
     return "fetch_emails" if intent.wants_conflict_check else "greet"
