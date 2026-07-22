@@ -1,8 +1,10 @@
 from googleapiclient.discovery import Resource
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import tools_condition
+from langgraph.types import interrupt
 
 from agentic_secretary import tools
 from agentic_secretary.chat import classify_intent, greet
@@ -45,26 +47,37 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
             "status": "done",
         }
 
+    def no_action_items(state: PlannerState) -> dict:
+        reply = interrupt(
+            "I checked your calendar and inbox -- nothing to report right now."
+        )
+        return {"messages": [HumanMessage(content=reply)]}
+
     def route_after_detection(state: PlannerState) -> str:
-        return "agent" if state["action_items"] else "greet"
+        return "agent" if state["action_items"] else "no_action_items"
 
     builder = StateGraph(PlannerState)
     builder.add_node("greet", greet)
     builder.add_node("fetch_emails", fetch_emails)
     builder.add_node("check_calendar", check_calendar)
     builder.add_node("detect_actions", detect_actions)
+    builder.add_node("no_action_items", no_action_items)
     builder.add_node("agent", make_agent_node(gmail_service))
     builder.add_node("tools", make_tools_node(gmail_service))
     builder.add_node("review", review)
 
     builder.add_edge(START, "greet")
-    builder.add_conditional_edges(
-        "greet", classify_intent, {"fetch_emails": "fetch_emails", "greet": "greet"}
-    )
+    _post_greet_routes = {"fetch_emails": "fetch_emails", "greet": "greet"}
+    builder.add_conditional_edges("greet", classify_intent, _post_greet_routes)
     builder.add_edge("fetch_emails", "check_calendar")
     builder.add_edge("check_calendar", "detect_actions")
     builder.add_conditional_edges(
-        "detect_actions", route_after_detection, {"agent": "agent", "greet": "greet"}
+        "detect_actions",
+        route_after_detection,
+        {"agent": "agent", "no_action_items": "no_action_items"},
+    )
+    builder.add_conditional_edges(
+        "no_action_items", classify_intent, _post_greet_routes
     )
     builder.add_conditional_edges(
         "agent", tools_condition, {"tools": "tools", "__end__": "review"}

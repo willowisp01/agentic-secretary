@@ -925,7 +925,7 @@ resolution.agent() failure handling ──┘
 
 ### Phase A: Graph UX + Atomicity
 
-- [ ] Task 12: `no_action_items` node
+- [x] Task 12: `no_action_items` node
 - [ ] Task 13: Fetch-stage atomicity (`fetch_failed`)
 
 ### Phase B: API failure handling
@@ -966,14 +966,14 @@ principle already applied to `answer_policy_question`/`fetch_failed`
 elsewhere in this plan.
 
 **Acceptance criteria:**
-- [ ] `route_after_detection` routes to `"no_action_items"` instead of
+- [x] `route_after_detection` routes to `"no_action_items"` instead of
       `"greet"` when `action_items` is empty
-- [ ] `no_action_items` shows a specific, real message via `interrupt()`,
+- [x] `no_action_items` shows a specific, real message via `interrupt()`,
       not a generic fallback
-- [ ] Routes to `classify_intent` next, not back through `greet`
+- [x] Routes to `classify_intent` next, not back through `greet`
 
 **Verification:**
-- [ ] `tests/test_graph.py` — a fixture with empty `action_items` routes
+- [x] `tests/test_graph.py` — a fixture with empty `action_items` routes
       to `no_action_items`, and its outgoing edge goes to `classify_intent`
 
 **Dependencies:** None

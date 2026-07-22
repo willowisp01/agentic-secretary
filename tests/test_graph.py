@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from agentic_secretary.chat import _Intent
+from agentic_secretary.chat import _REPROMPT_MESSAGE, _Intent
 from agentic_secretary.detection import _EmailIntent
 from agentic_secretary.graph import build_graph
 from agentic_secretary.state import PlannerState
@@ -113,10 +113,58 @@ def test_graph_invoke_returns_final_state_with_status_done(
     assert result["emails"] == FAKE_EMAILS
     assert result["calendar_events"] == FAKE_EVENTS
     assert result["status"] == "done"
-    # No action items in this fixture -- detect_actions routes back to
-    # greet for another turn rather than into the agent, so this second
-    # invoke ends at another interrupt, not a graph-complete state.
+    # No action items in this fixture -- detect_actions routes to
+    # no_action_items for a real acknowledgment rather than into the agent,
+    # so this second invoke ends at another interrupt, not a graph-complete
+    # state.
     assert "__interrupt__" in result
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+@patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
+def test_no_action_items_shows_real_acknowledgment_not_silent_greet_loop(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_chat_anthropic
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    interrupt_value = result["__interrupt__"][0].value
+    assert "checked your calendar and inbox" in interrupt_value
+    assert interrupt_value != _REPROMPT_MESSAGE
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+@patch("agentic_secretary.detection._analyze_email", return_value=NO_INTENT)
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
+def test_no_action_items_routes_to_classify_intent_not_back_through_greet(
+    mock_list_emails, mock_list_events, mock_analyze_email, mock_chat_anthropic
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
+    graph, mock_list_emails_target, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+    graph.invoke(
+        Command(resume="check for conflicts"), config=config
+    )  # halts at no_action_items
+
+    # Resuming here should be treated as a fresh chat turn routed through
+    # classify_intent, not a second greet opening/reprompt -- a second
+    # "check for conflicts" should fetch again, not re-show greet's prompt.
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    assert mock_list_emails.call_count == 2
+    assert result["status"] == "done"
 
 
 OVERLAPPING_EVENTS = [
