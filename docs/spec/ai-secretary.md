@@ -2,9 +2,10 @@
 
 See [`docs/intent/ai-secretary.md`](../intent/ai-secretary.md) for the confirmed
 project intent this spec implements. This file also covers
-[Milestone 1.5: Resilience & UX Hardening](#milestone-15-resilience--ux-hardening)
-below, which hardens this same graph before Milestone 2 (RAG) adds more API
-call sites to it.
+[Milestone 1.5: Resilience & UX Hardening](#milestone-15-resilience--ux-hardening),
+which hardens this same graph, and
+[Milestone 2: RAG (Policy Knowledge Base)](#milestone-2-rag-policy-knowledge-base),
+which adds retrieval on top of it.
 
 ## Objective
 
@@ -398,3 +399,201 @@ None outstanding — all four failure-handling designs (including reversing
 `_analyze_email`'s original silent-skip choice) were settled in discussion
 before/during implementation; see `tasks/plan.md`'s Milestone 1.5 Risks
 table for the accepted-vs-resolved tradeoffs.
+
+---
+
+# Milestone 2: RAG (Policy Knowledge Base)
+
+Written before implementation begins (Tasks 17-29 in `tasks/plan.md`),
+unlike Milestone 1.5's section above which was backfilled after the fact —
+this time the spec leads the build. See that file's Milestone 2 Overview,
+Architecture Decisions, and Task Details for full task-by-task rationale;
+this section records the parts of that design a spec should own: scope,
+external contracts, and boundaries.
+
+## Objective
+
+Add a retrieval-augmented capability on top of Milestone 1.5's hardened
+graph: a synthetic corpus of advisory scheduling policies (leave types,
+meeting norms, expense categories), sized deliberately so some topics are
+adjacent/overlapping enough that plain cosine-similarity retrieval starts
+confusing them — the same structural gap a prior tutorial-style RAG
+project left unaddressed despite a corpus large enough to need it.
+
+**Explicitly out of scope:** policies that are themselves scheduling
+constraints (e.g. "must work in-office on Fridays"). Those are
+deterministic, checkable facts — not prose to retrieve and cite — and
+would need a structured constraint model plus a new deterministic
+detection-layer check, the same "don't trust the LLM with computable
+facts" principle this codebase already enforces elsewhere (the
+weekday-name ban in `resolution.py`'s system prompt; deterministic overlap
+checks in `detection.py`). Out of scope for this milestone; a clean
+candidate for a future one.
+
+**Demonstrates both RAG control-flow architectures** against one shared
+retrieval engine:
+- **Agentic RAG** — `search_policies` bound into `resolution.agent()`
+  alongside the existing three tools; the agent decides mid-reasoning
+  whether an action item warrants a policy check. Guaranteed exercised
+  (not just possible) via a seeded `policy_question` email pattern in both
+  a found-relevant-policy and no-relevant-policy variant.
+- **2-Step RAG** — a direct chat question ("what's our policy on X?") is
+  classified by a now-3-way `classify_intent` and routed straight to a new
+  `answer_policy_question` node: retrieve, generate, done.
+
+**Success looks like:** a seeded `policy_question` email gets a drafted
+reply grounded in the correct policy document (or a plain statement that
+none applies, for the not-found variant); a direct chat policy question —
+including one that only an adjacent-pair-aware retrieval can resolve
+correctly — is answered with a citation without ever touching
+`fetch_emails`/`check_calendar`/`detect_actions`; and a scheduling item
+with no applicable policy is still resolved on judgment alone, correctly
+reporting that no policy was consulted.
+
+## Tech Stack Additions
+
+- `langchain-openai` — OpenAI `text-embedding-3-small` supplies dense
+  embeddings (Anthropic has no embeddings endpoint). Claude remains the
+  only LLM used for reasoning/generation; OpenAI is scoped to embeddings
+  only.
+- `langchain-chroma` + `chromadb` (Cloud client) — hybrid retrieval (dense
+  `Knn` + sparse `Bm25EmbeddingFunction`, fused via `Rrf`), all computed
+  server-side. Chosen over self-hosted Chroma (native hybrid search is
+  Cloud-only today) and over Weaviate (same capability self-hosted, but
+  Docker-only — Weaviate Embedded is Linux/macOS-only, unsupported on this
+  project's Windows environment).
+- `torch` + `transformers`/`FlagEmbedding` — local BGE-Reranker-v2-m3
+  cross-encoder reranking. Chosen over an LLM-based reranker for latency
+  and per-call cost, at the cost of a heavier local footprint (~1-2GB
+  model download). Neither Chroma nor OpenAI expose a rerank endpoint, so
+  this is hand-built regardless of provider choice.
+
+Flagged per this doc's existing "ask first before adding dependencies
+beyond the tech stack" boundary.
+
+## Project Structure Additions
+
+- `src/agentic_secretary/rag.py` (new) — owns chunking, hybrid retrieval,
+  and reranking as shared logic; both `resolution.agent()` (agentic) and
+  `answer_policy_question` (2-step) call into it rather than each
+  reimplementing retrieval. Exposes `build_policy_index()` (ingestion) and
+  `search_policies(query, k) -> str` (retrieval, wrapped as
+  `search_policies_tool = tool(search_policies)`).
+- `seed_data/policies/*.md` (new) — 8-15 short, single-topic, advisory-only
+  documents, including at least two pairs of genuinely adjacent topics
+  distinguishable only by a specific checkable detail. **Chunking: one file
+  = one chunk, no splitter** — each doc is authored short and single-topic,
+  so the file boundary is already the correct semantic boundary; no
+  fixed-size splitting, overlap, hierarchical chunking, or category
+  metadata (would blur the deliberately-overlapping pairs that hybrid
+  search + reranking exist specifically to disambiguate).
+- `state.py` gains a fifth `ActionNeeded` variant, `PolicyQuestionEmail`
+  (`kind`, `description`, `email` — no `events`, since it isn't about
+  calendar state). Detected by extending `_analyze_email`'s existing
+  classification with a fifth category, not a separate detection pass.
+- `chat.py` gains `answer_policy_question`; `_Intent` changes from
+  `wants_conflict_check: bool` to `intent: Literal["check_conflicts",
+  "policy_question", "other"]`, matching this codebase's existing
+  preference for discriminated types over ambiguous booleans. The same
+  `classify_intent` is attached as the router for `greet`,
+  `answer_policy_question`, `fetch_failed`, and `no_action_items` — every
+  node that ends a turn by capturing a fresh reply routes through it
+  directly, never back through `greet`'s own fixed prompt.
+- `config.py` gains `openai_api_key`, `embedding_model_name` (default
+  `text-embedding-3-small`), `chroma_api_key`, `chroma_tenant`,
+  `chroma_database`, `reranker_model_name` (default
+  `BAAI/bge-reranker-v2-m3`).
+
+## Failure Handling Behavior (extends Milestone 1.5)
+
+Same rule, no new pattern: 0 retries, plain try/except per call site,
+immediate fallback. Applied to the three new provider surfaces (OpenAI
+embedding calls, Chroma Cloud network calls, the local BGE inference
+call), split by *when* the failure happens rather than by provider:
+
+- **Index-build/upsert failure** (ingestion time) raises loudly — the
+  retrieval feature is entirely unavailable for this run, and there's no
+  partial-index state worth silently continuing with.
+- **Query-time failure** inside `search_policies` (retrieval or reranking)
+  returns a degradation string ("Policy search is temporarily unavailable;
+  proceeding without it.") instead of raising, so the agent's turn or the
+  2-step answer path continues rather than crashing. Textually distinct
+  from the legitimate "No relevant policy found." sentinel — one means the
+  search ran and found nothing, the other means the search didn't run.
+
+## Boundaries Additions
+
+- **Ask first:** already-flagged new dependencies above; any change to the
+  hybrid-retrieval or reranking approach once implemented (e.g. dropping
+  the reranker for cost reasons) would change a load-bearing part of this
+  milestone's demonstrated technique, not just an implementation detail.
+- **New external prerequisite:** a Chroma Cloud account, database, and API
+  key — same category of manual setup step as Milestone 1's Google Cloud
+  OAuth client and burner account. Confirm reachability
+  (`chromadb.CloudClient()`) and free-tier limits for this project's scale
+  during Task 17, before building on top of it.
+- **Deliberate, scoped exception to "local-only":** the policy corpus
+  (text + embeddings) lives on Chroma's managed cloud service. Scoped
+  *only* to the vector store — Gmail/Calendar access, the burner account,
+  and all LLM reasoning stay exactly as local as Milestone 1 left them.
+  Acceptable because the corpus is synthetic policy text, not sensitive.
+- **Never do:** let the agent fabricate a policy citation when
+  `search_policies` returns the no-match sentinel or the degradation
+  string — the system prompt must state plainly that no policy applies
+  rather than guess, same "don't guess, ask/state directly" principle
+  already governing Milestone 1's action resolution.
+
+## Testing Strategy Additions
+
+- `tests/test_rag.py` (new) — mocks the Chroma client, `OpenAIEmbeddings`,
+  and the reranker; no live network calls or model downloads in the
+  automated suite. Covers ingestion (one chunk per file, stable ids,
+  filename metadata), retrieval (hybrid fusion, rerank narrowing, citation
+  formatting, the no-match sentinel), and both failure-handling paths
+  (index-build raises, query-time degrades).
+- `evals/policy_retrieval_examples.py` + `tests/test_policy_retrieval_eval.py`
+  (new, marked `llm_eval`, excluded from CI) — a golden query → expected
+  source dataset weighted toward the overlapping-topic pairs, reporting
+  precision separately for a cosine-only baseline vs. the real
+  hybrid+rerank pipeline. The concrete before/after this milestone exists
+  to demonstrate.
+- `tests/test_detection.py`, `tests/test_resolution.py`, `tests/test_chat.py`,
+  `tests/test_graph.py` extended with mocked coverage for
+  `PolicyQuestionEmail` detection, the agentic tool-binding path, the
+  3-way `classify_intent` split, and `answer_policy_question`.
+- `evals/agent_examples.py` extended with both `policy_question` variants
+  plus a general conflict-with-policy-context case; LangSmith judge rubric
+  updated to score "did it correctly apply/dismiss the relevant policy."
+
+## Success Criteria
+
+- [ ] Seeded `policy_question` email (found variant): agent calls
+      `search_policies` and drafts a reply citing the correct policy.
+- [ ] Seeded `policy_question` email (not-found variant): agent states
+      plainly that no policy applies rather than fabricating an answer.
+- [ ] A scheduling conflict with no applicable policy is resolved on
+      judgment alone, correctly reporting no policy was consulted.
+- [ ] A direct chat policy question — including one only the
+      overlapping-pair distinction resolves correctly — is answered with a
+      citation via `answer_policy_question`, without touching
+      `fetch_emails`/`check_calendar`/`detect_actions`.
+- [ ] Retrieval eval (Task 26) shows a measured precision difference
+      between cosine-only and hybrid+rerank on the ambiguous-topic
+      queries — recorded here once real numbers exist.
+- [ ] A failure-injection test (mocked Chroma/embedding/reranker call
+      raising) proves immediate, clean fallback on both the agentic and
+      2-step paths, consistent with Milestone 1.5's 0-retry rule.
+- [ ] `uv run pytest -m "not llm_eval"` and `uv run ruff check .` both
+      pass.
+- [ ] README documents Chroma Cloud + OpenAI setup and both demo paths.
+
+## Open Questions
+
+- Exact wording/topics of the 8-15 policy documents and which pairs are
+  made deliberately overlapping — left to Task 18 implementation time, not
+  spec-blocking.
+- Chroma Cloud pricing tier / free-tier limits for this project's scale —
+  confirm during Task 17 setup.
+- Whether Task 26's before/after comparison is compelling enough for the
+  README's headline demo, or better left as spec-doc detail — decide once
+  real numbers exist (Task 29).
