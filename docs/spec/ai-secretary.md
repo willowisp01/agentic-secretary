@@ -1,7 +1,10 @@
 # Spec: AI Secretary (Portfolio Project) — Milestone 1: Planner
 
 See [`docs/intent/ai-secretary.md`](../intent/ai-secretary.md) for the confirmed
-project intent this spec implements.
+project intent this spec implements. This file also covers
+[Milestone 1.5: Resilience & UX Hardening](#milestone-15-resilience--ux-hardening)
+below, which hardens this same graph before Milestone 2 (RAG) adds more API
+call sites to it.
 
 ## Objective
 
@@ -175,7 +178,10 @@ results), not a hand-maintained parallel list.
 - **Always do:** keep the agent's default behavior to draft-only (no
   auto-send email, no auto-create calendar event without explicit
   confirmation); keep all credentials/secrets out of git; run tests before
-  committing node/tool logic changes.
+  committing node/tool logic changes; handle a new LLM/API call site with
+  0 retries, fail-fast, catch-and-fall-back-immediately (see Milestone
+  1.5's Failure Handling Behavior) rather than adding a bespoke
+  retry/backoff scheme per call site.
 - **Ask first:** adding new dependencies beyond the tech stack above;
   changing the default model tier (e.g., away from Haiku) in a way that
   changes cost profile; expanding scope into RAG/vector DB or multi-persona
@@ -271,3 +277,124 @@ Action Resolution Behavior above) after Task 8 prototyping showed the
 menu's per-decision pre-approval gate added interaction friction without
 adding real safety beyond what the propose-only tool boundary already
 guarantees.
+
+---
+
+# Milestone 1.5: Resilience & UX Hardening
+
+Backfilled after the fact — this section documents design already settled
+and largely implemented via `tasks/plan.md`'s Milestone 1.5 tasks (12-16)
+before this spec section was written; see that file's Task Details for the
+full per-task rationale.
+
+## Objective
+
+Milestone 1's finished graph had two gaps, found by re-examining it rather
+than by a live failure: none of its API calls (three `ChatAnthropic` call
+sites, four Google API call sites) had any failure handling — an exception
+crashed the whole CLI process — and `route_after_detection` silently
+looped back to `greet` when no action items were found, giving the human
+no signal a check even ran. Both are fixed here, ahead of Milestone 2, so
+Milestone 2's new API calls (OpenAI, Chroma Cloud, a local reranker) can
+follow the same established pattern instead of inventing a second one.
+
+**Guiding principle: 0 retries everywhere, fail fast, catch and fall back
+immediately.** No exponential backoff, no attempt counting. The
+conversational loop already gives the human a natural retry path (just ask
+again), so a second automatic-retry layer underneath it would trade
+latency for a benefit the chat loop already provides for free.
+
+## Failure Handling Behavior
+
+Each failure-prone call site is handled differently, because each is a
+structurally different kind of function — there is no single generic
+wrapper:
+
+- **`classify_intent`** (a router, not a node — only returns a routing
+  string) — catches the failure, prints a plain diagnostic line directly
+  to stdout (matching `cli.py`'s existing interrupt-rendering format,
+  since a router can't inject a message into `state["messages"]`), and
+  falls back to routing `"greet"`. Accepted limitation: this message is a
+  bare terminal side effect — it won't appear in a LangSmith trace or any
+  future non-CLI frontend.
+- **`fetch_emails`/`check_calendar`** — each wraps its Google API call and,
+  on failure, sets `{"status": "error", "error_message": str(e)}` instead
+  of letting the exception propagate. Both set `status` fresh on *every*
+  invocation (`"fetching"`/`"done"` on success, `"error"` on failure), not
+  only on failure, so a stale `"error"` from an earlier turn's failure
+  never leaks into a later turn's routing decision. Either step's failure
+  routes to a shared `fetch_failed` node, which shows the error via
+  `interrupt()` and routes to `classify_intent` next — critically,
+  `detect_actions` is never reached with partial (emails-only or
+  calendar-only) data in the same turn, avoiding a confidently-wrong
+  result (a real conflict silently missed because only half the data was
+  available).
+- **`_analyze_email`** (one call per email, inside `detect_actions`'s
+  detection loop) — catches per-email, skips that email (contributes no
+  action item from it), and continues the rest of the batch. Unlike the
+  original design, the failure is **not** silent: the failing email's
+  subject is recorded in a new `failed_emails: list[str]` field on
+  `PlannerState`, and whichever node actually talks to the human that turn
+  — `review()` (alongside its existing collision note) or
+  `no_action_items()` (for the all-failed-and-nothing-else-found case) —
+  appends a note naming the failed email(s). Reversed from an initial
+  silent-skip design once it was recognized as the same "confidently wrong
+  from partial data" risk that motivates the `fetch_failed` design above,
+  just one email wide instead of a whole fetch.
+- **`resolution.agent()`** (the main node, which may have already executed
+  several real tool calls — real Gmail drafts, real proposals — before a
+  later call in the same turn fails) — catches, and instead of a canned
+  "sorry, try again" message, builds an honest status report from whatever
+  `review.py`'s existing `_latest_proposals` helper finds already in
+  `state["messages"]`, describing what was actually completed before the
+  failure. A canned "nothing happened" message would be dishonest here in
+  a way it isn't for the other call sites: real, persisted side effects
+  (a Gmail draft genuinely created via `drafts.create`) could already
+  exist. True rollback (a `drafts.delete` capability) was considered and
+  rejected — not worth introducing the first destructive tool capability
+  to undo something otherwise harmless to leave behind. The resulting
+  plain-text `AIMessage` carries no tool calls, so it flows through the
+  *already-existing* `tools_condition` → `review` path with zero new graph
+  wiring.
+
+## Project Structure Additions
+
+- `PlannerState` (`state.py`) gains two `NotRequired` fields:
+  `error_message: str` (set alongside `status: "error"`, read by
+  `fetch_failed`) and `failed_emails: list[str]` (set by `detect_actions`,
+  read by `review`/`no_action_items`). `NotRequired` so every existing
+  `PlannerState` literal across the test suite doesn't need updating just
+  to add a field most turns never populate.
+- `graph.py` gains two new nodes, both inline closures alongside the
+  existing ones (`fetch_emails`, `check_calendar`, `detect_actions` are
+  the only real logic; wiring stays in `graph.py` per the Task 8.5
+  "wiring only" principle): `fetch_failed` (shows the fetch-stage error,
+  routes to `classify_intent`) and `no_action_items` (shows the "nothing
+  to report" acknowledgment, routes to `classify_intent`). Both reuse the
+  same `classify_intent`-routing edge map `greet` already used, rather
+  than a new one per node.
+
+## Success Criteria
+
+- [x] A "check for conflicts" turn that finds nothing shows a real
+      acknowledgment (`no_action_items`), not a silent loop back to
+      `greet`.
+- [x] A simulated Google API failure during `fetch_emails`/`check_calendar`
+      aborts the whole turn (never reaches `detect_actions` with partial
+      data) and shows a clear message via `fetch_failed`.
+- [x] A simulated `classify_intent` failure prints a diagnostic line and
+      falls back to routing `"greet"` without crashing.
+- [ ] A simulated `_analyze_email` failure for one email doesn't stop the
+      rest of the batch from being classified normally, and the human is
+      told which email couldn't be analyzed.
+- [ ] A simulated `resolution.agent()` failure after some tool calls
+      already succeeded produces an honest report of what was actually
+      done, not a generic "nothing happened" message.
+- [ ] `uv run pytest -m "not llm_eval"` and `uv run ruff check .` both pass.
+
+## Open Questions
+
+None outstanding — all four failure-handling designs (including reversing
+`_analyze_email`'s original silent-skip choice) were settled in discussion
+before/during implementation; see `tasks/plan.md`'s Milestone 1.5 Risks
+table for the accepted-vs-resolved tradeoffs.
