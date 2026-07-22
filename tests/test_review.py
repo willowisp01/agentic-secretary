@@ -323,6 +323,25 @@ def test_review_interrupts_with_the_agents_final_summary():
     assert result["__interrupt__"][0].value.startswith("All done.")
 
 
+def test_review_omits_failed_email_note_when_none_failed():
+    graph = _build_test_graph()
+    config = {"configurable": {"thread_id": "t1-no-failures"}}
+
+    result = graph.invoke(_base_state(), config=config)
+
+    assert "couldn't analyze" not in result["__interrupt__"][0].value
+
+
+def test_review_includes_failed_email_note_when_present():
+    graph = _build_test_graph()
+    config = {"configurable": {"thread_id": "t1-failures"}}
+    state = _base_state(failed_emails=["Quick sync tomorrow?"])
+
+    result = graph.invoke(state, config=config)
+
+    assert "Quick sync tomorrow?" in result["__interrupt__"][0].value
+
+
 def test_review_always_appends_the_propose_only_disclaimer():
     # Live-discovered: the agent's own closing text after an "approved"
     # reply used finality language ("your calendar is now updated") that

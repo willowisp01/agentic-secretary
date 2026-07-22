@@ -51,3 +51,8 @@ class PlannerState(TypedDict):
     # routing decision. NotRequired since existing PlannerState literals
     # (initial states, fixtures) predate this field and never set it.
     error_message: NotRequired[str]
+    # Subjects of emails detect_actions couldn't analyze this turn (LLM
+    # call failed) -- surfaced as a note by review/no_action_items rather
+    # than staying silent. NotRequired for the same reason as
+    # error_message above.
+    failed_emails: NotRequired[list[str]]

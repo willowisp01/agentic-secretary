@@ -384,7 +384,7 @@ wrapper:
       data) and shows a clear message via `fetch_failed`.
 - [x] A simulated `classify_intent` failure prints a diagnostic line and
       falls back to routing `"greet"` without crashing.
-- [ ] A simulated `_analyze_email` failure for one email doesn't stop the
+- [x] A simulated `_analyze_email` failure for one email doesn't stop the
       rest of the batch from being classified normally, and the human is
       told which email couldn't be analyzed.
 - [ ] A simulated `resolution.agent()` failure after some tool calls

@@ -8,7 +8,7 @@ from langgraph.types import interrupt
 
 from agentic_secretary import tools
 from agentic_secretary.chat import classify_intent, greet
-from agentic_secretary.detection import detect_actions
+from agentic_secretary.detection import _failed_email_note, detect_actions
 from agentic_secretary.resolution import make_agent_node, make_tools_node
 from agentic_secretary.review import review, route_after_review
 from agentic_secretary.state import (
@@ -60,9 +60,11 @@ def build_graph(gmail_service: Resource, calendar_service: Resource):
         return {"messages": [HumanMessage(content=reply)]}
 
     def no_action_items(state: PlannerState) -> dict:
-        reply = interrupt(
-            "I checked your calendar and inbox -- nothing to report right now."
-        )
+        message = "I checked your calendar and inbox -- nothing to report right now."
+        failed_note = _failed_email_note(state.get("failed_emails", []))
+        if failed_note is not None:
+            message = f"{message}\n\n{failed_note}"
+        reply = interrupt(message)
         return {"messages": [HumanMessage(content=reply)]}
 
     def route_after_fetch_emails(state: PlannerState) -> str:

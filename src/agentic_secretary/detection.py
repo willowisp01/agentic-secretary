@@ -152,14 +152,35 @@ def _correct_proposed_start_offset(
     return intent.model_copy(update={"proposed_start": corrected_start})
 
 
+def _failed_email_note(failed_emails: list[str]) -> str | None:
+    """Formats the "couldn't analyze N email(s)" note shown by review()/
+    no_action_items() -- one definition, reused by both, rather than each
+    building its own version of the same text.
+    """
+    if not failed_emails:
+        return None
+    subjects = ", ".join(repr(subject) for subject in failed_emails)
+    plural = "email" if len(failed_emails) == 1 else "emails"
+    return f"Note: couldn't analyze {len(failed_emails)} {plural}: {subjects}."
+
+
 def _find_email_conflicts(
     emails: list[tools.EmailSummary], calendar_events: list[tools.CalendarEvent]
-) -> list[EmailConflict | RescheduleRequest]:
+) -> tuple[list[EmailConflict | RescheduleRequest], list[str]]:
     conflicts: list[EmailConflict | RescheduleRequest] = []
+    failed_emails: list[str] = []
     events_by_id = {event.id: event for event in calendar_events}
 
     for email in emails:
-        intent = _analyze_email(email, calendar_events)
+        try:
+            intent = _analyze_email(email, calendar_events)
+        except Exception:
+            # Skip this email -- it contributes no action item -- and keep
+            # processing the rest of the batch, same shape as the
+            # unknown-reference skip below. Unlike that case, this failure
+            # isn't silent: its subject is surfaced via _failed_email_note.
+            failed_emails.append(email.subject)
+            continue
 
         if (
             intent.proposes_new_meeting
@@ -195,15 +216,16 @@ def _find_email_conflicts(
                 )
             )
 
-    return conflicts
+    return conflicts, failed_emails
 
 
 def detect_actions(state: PlannerState) -> dict:
     calendar_events = state["calendar_events"]
     emails = state["emails"]
+    email_conflicts, failed_emails = _find_email_conflicts(emails, calendar_events)
     action_items: list[ActionNeeded] = (
         _find_calendar_overlaps(calendar_events)
         + _find_back_to_back(calendar_events)
-        + _find_email_conflicts(emails, calendar_events)
+        + email_conflicts
     )
-    return {"action_items": action_items}
+    return {"action_items": action_items, "failed_emails": failed_emails}

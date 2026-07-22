@@ -60,6 +60,7 @@ def test_planner_state_has_expected_fields():
         "action_items",
         "status",
         "error_message",
+        "failed_emails",
     }
 
 
@@ -198,6 +199,31 @@ def test_fetch_failed_routes_to_classify_intent_not_back_through_greet(
 
     assert mock_list_emails.call_count == 2
     mock_list_events.assert_called_once()
+
+
+@patch("agentic_secretary.chat.ChatAnthropic")
+@patch("agentic_secretary.graph.detect_actions")
+@patch("agentic_secretary.graph.tools.list_upcoming_events", return_value=FAKE_EVENTS)
+@patch("agentic_secretary.graph.tools.list_recent_emails", return_value=FAKE_EMAILS)
+def test_no_action_items_includes_failed_email_note_when_present(
+    mock_list_emails, mock_list_events, mock_detect_actions, mock_chat_anthropic
+):
+    mock_chat_anthropic.return_value.with_structured_output.return_value.invoke.return_value = _Intent(
+        wants_conflict_check=True
+    )
+    mock_detect_actions.return_value = {
+        "action_items": [],
+        "failed_emails": ["Quick sync tomorrow?"],
+    }
+    graph, _, _ = _build_test_graph()
+    config = {"configurable": {"thread_id": "test"}}
+    graph.invoke(_INITIAL_STATE, config=config)  # halts at greet's opening interrupt
+
+    result = graph.invoke(Command(resume="check for conflicts"), config=config)
+
+    interrupt_value = result["__interrupt__"][0].value
+    assert "checked your calendar and inbox" in interrupt_value
+    assert "Quick sync tomorrow?" in interrupt_value
 
 
 @patch("agentic_secretary.chat.ChatAnthropic")

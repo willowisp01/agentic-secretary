@@ -321,6 +321,31 @@ def test_detect_actions_no_false_positive_for_mention_and_digest_emails(mock_ana
 
 
 @patch("agentic_secretary.detection._analyze_email")
+def test_detect_actions_skips_email_that_fails_analysis_and_records_its_subject(
+    mock_analyze,
+):
+    def side_effect(email, events):
+        if email.id == "email_meeting_request":
+            raise Exception("Anthropic API is down")
+        return _intent_for(email.id)
+
+    mock_analyze.side_effect = side_effect
+    state = {
+        "emails": [MEETING_REQUEST_EMAIL, RESCHEDULE_EMAIL],
+        "calendar_events": [STANDUP, CLIENT_CALL],
+        "action_items": [],
+        "status": "done",
+    }
+
+    result = detect_actions(state)
+
+    kinds = {a.kind for a in result["action_items"]}
+    assert "reschedule" in kinds
+    assert "email_conflict" not in kinds
+    assert result["failed_emails"] == [MEETING_REQUEST_EMAIL.subject]
+
+
+@patch("agentic_secretary.detection._analyze_email")
 def test_detect_actions_groups_multiple_overlapping_events_into_one_email_conflict(
     mock_analyze,
 ):

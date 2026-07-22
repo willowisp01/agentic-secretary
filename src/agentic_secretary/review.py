@@ -4,7 +4,11 @@ from langchain_core.messages import AnyMessage, HumanMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.types import interrupt
 
-from agentic_secretary.detection import _find_back_to_back, _find_calendar_overlaps
+from agentic_secretary.detection import (
+    _failed_email_note,
+    _find_back_to_back,
+    _find_calendar_overlaps,
+)
 from agentic_secretary.state import PlannerState
 from agentic_secretary.tools import CalendarEvent, EventProposal
 
@@ -122,10 +126,15 @@ def review(state: PlannerState) -> dict:
     # "Note: ..." string. Computed fresh every call, independent of
     # whatever the agent's own summary claims.
     note = _collision_note(state)
+    failed_note = _failed_email_note(state.get("failed_emails", []))
 
-    # What the human actually sees: the agent's prose, the collision note
-    # underneath it if there is one, then the fixed disclaimer always last.
-    display = summary if note is None else f"{summary}\n\n{note}"
+    # What the human actually sees: the agent's prose, then any notes
+    # (collision, failed-email) underneath it, then the fixed disclaimer
+    # always last.
+    display = summary
+    for extra in (note, failed_note):
+        if extra is not None:
+            display = f"{display}\n\n{extra}"
     display = f"{display}\n\n{_DISCLAIMER}"
 
     # Pause the graph here and show `display`. Execution resumes when the

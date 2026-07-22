@@ -931,7 +931,7 @@ resolution.agent() failure handling ──┘
 ### Phase B: API failure handling
 
 - [x] Task 14: `classify_intent` failure handling
-- [ ] Task 15: `_analyze_email` failure handling
+- [x] Task 15: `_analyze_email` failure handling
 - [ ] Task 16: `resolution.agent()` failure handling
 
 ### Checkpoint: Milestone 1.5 complete
@@ -1091,23 +1091,23 @@ found case, which wouldn't reach `review` at all. Both already end in an
 print call is needed anywhere.
 
 **Acceptance criteria:**
-- [ ] A failure classifying one email doesn't raise and doesn't stop the
+- [x] A failure classifying one email doesn't raise and doesn't stop the
       rest of the batch from being processed normally
-- [ ] The failed email contributes zero entries to `action_items`, but its
+- [x] The failed email contributes zero entries to `action_items`, but its
       subject is recorded in `state["failed_emails"]`
-- [ ] `review()`'s display includes a note naming the failed email(s) when
+- [x] `review()`'s display includes a note naming the failed email(s) when
       `action_items` is non-empty; `no_action_items()`'s message includes
       the same note when it is empty
-- [ ] No note is appended, in either node, when `failed_emails` is empty
+- [x] No note is appended, in either node, when `failed_emails` is empty
 
 **Verification:**
-- [ ] `tests/test_detection.py` — a mocked `_analyze_email` call raising
+- [x] `tests/test_detection.py` — a mocked `_analyze_email` call raising
       for one email in a multi-email fixture still returns correct action
       items for the others, and that email's subject appears in
       `failed_emails`
-- [ ] `tests/test_review.py` — `review()`'s display includes the note when
+- [x] `tests/test_review.py` — `review()`'s display includes the note when
       `failed_emails` is non-empty, and omits it when empty
-- [ ] `tests/test_graph.py` — a fixture with empty `action_items` and a
+- [x] `tests/test_graph.py` — a fixture with empty `action_items` and a
       non-empty `failed_emails` routes to `no_action_items` and its
       interrupt value includes the note
 
