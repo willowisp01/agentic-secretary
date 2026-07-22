@@ -6,12 +6,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import tools_condition
 
 from agentic_secretary.resolution import make_agent_node, make_tools_node
+from agentic_secretary.review import _latest_proposals
 from agentic_secretary.state import (
     CalendarOverlapConflict,
     PlannerState,
     RescheduleRequest,
 )
-from agentic_secretary.tools import CalendarEvent, EmailSummary
+from agentic_secretary.tools import CalendarEvent, EmailSummary, EventProposal
 
 NOW = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
 EVENT_A = CalendarEvent(
@@ -155,3 +156,65 @@ def test_agent_tools_loop_terminates_and_calls_the_right_tool(mock_chat_anthropi
     tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 1
     assert "Client Call" in str(tool_messages[0].content)
+
+
+@patch("agentic_secretary.resolution.ChatAnthropic")
+def test_agent_failure_with_no_prior_proposals_reports_nothing_was_done(
+    mock_chat_anthropic,
+):
+    mock_chat_anthropic.return_value = _llm_returning(
+        Exception("Anthropic API is down")
+    )
+
+    agent = make_agent_node(MagicMock(name="gmail_service"))
+    result = agent(_base_state())
+
+    final = result["messages"][-1]
+    assert isinstance(final, AIMessage)
+    assert not final.tool_calls
+    assert "error" in final.content.lower()
+    assert "try again" in final.content.lower()
+
+
+@patch("agentic_secretary.resolution.ChatAnthropic")
+def test_agent_failure_with_prior_proposals_reports_what_was_actually_done(
+    mock_chat_anthropic,
+):
+    mock_chat_anthropic.return_value = _llm_returning(
+        Exception("Anthropic API is down")
+    )
+    proposal_a = EventProposal(
+        title="Client Call",
+        start=NOW + timedelta(hours=2),
+        duration_minutes=30,
+        existing_event_id="e2",
+    )
+    proposal_b = EventProposal(
+        title="New Sync", start=NOW + timedelta(hours=3), duration_minutes=45
+    )
+    existing_messages = [
+        SystemMessage(content="..."),
+        HumanMessage(content="..."),
+        ToolMessage(
+            content=str(proposal_a), artifact=proposal_a, tool_call_id="call_1"
+        ),
+        ToolMessage(
+            content=str(proposal_b), artifact=proposal_b, tool_call_id="call_2"
+        ),
+    ]
+
+    agent = make_agent_node(MagicMock(name="gmail_service"))
+    result = agent(_base_state(messages=existing_messages))
+
+    final = result["messages"][-1]
+    assert isinstance(final, AIMessage)
+    assert not final.tool_calls
+    assert "error" in final.content.lower()
+    assert "try again" in final.content.lower()
+    # Verified against _latest_proposals' own output, not a hand-duplicated
+    # list -- guards against the message-building logic drifting from what
+    # the helper it reuses actually reports.
+    expected_proposals = _latest_proposals(existing_messages)
+    assert len(expected_proposals) == 2
+    for proposal in expected_proposals:
+        assert proposal.title in final.content

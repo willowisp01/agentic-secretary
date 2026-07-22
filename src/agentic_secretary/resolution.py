@@ -3,12 +3,13 @@ from typing import Callable
 
 from googleapiclient.discovery import Resource
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
 
 from agentic_secretary import tools
 from agentic_secretary.config import settings
+from agentic_secretary.review import _latest_proposals
 from agentic_secretary.state import (
     ActionNeeded,
     BackToBackConflict,
@@ -124,6 +125,29 @@ def _build_context(state: PlannerState) -> str:
     )
 
 
+def _describe_proposal(proposal: tools.EventProposal) -> str:
+    verb = "move" if proposal.existing_event_id else "propose"
+    return f"{verb} {proposal.title!r} to {proposal.start.isoformat()}"
+
+
+def _honest_failure_report(messages: list[AnyMessage]) -> str:
+    """Built on failure instead of letting the exception propagate. A
+    canned "nothing happened, try again" message would be dishonest if any
+    tool call already succeeded this turn -- real, persisted side effects
+    (a Gmail draft, an event proposal) could already exist. Reuses
+    review.py's _latest_proposals (the same "current live proposals" view
+    it uses for the collision note) rather than re-deriving that logic.
+    """
+    proposals = _latest_proposals(messages)
+    if not proposals:
+        return "I ran into an error and wasn't able to do anything this turn -- want to try again?"
+    completed = ", ".join(_describe_proposal(p) for p in proposals)
+    return (
+        f"Before running into an error, I managed to: {completed}. "
+        "I couldn't get to the rest -- want me to try again?"
+    )
+
+
 def _make_bound_tools(gmail_service: Resource) -> list[BaseTool]:
     return [
         tools.propose_event_tool,
@@ -155,7 +179,10 @@ def make_agent_node(gmail_service: Resource) -> Callable[[PlannerState], dict]:
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=_build_context(state)),
             ]
-        response = llm_with_tools.invoke(messages + seed)
+        try:
+            response = llm_with_tools.invoke(messages + seed)
+        except Exception:
+            response = AIMessage(content=_honest_failure_report(state["messages"]))
         return {"messages": seed + [response]}
 
     return agent

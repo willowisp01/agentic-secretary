@@ -387,10 +387,10 @@ wrapper:
 - [x] A simulated `_analyze_email` failure for one email doesn't stop the
       rest of the batch from being classified normally, and the human is
       told which email couldn't be analyzed.
-- [ ] A simulated `resolution.agent()` failure after some tool calls
+- [x] A simulated `resolution.agent()` failure after some tool calls
       already succeeded produces an honest report of what was actually
       done, not a generic "nothing happened" message.
-- [ ] `uv run pytest -m "not llm_eval"` and `uv run ruff check .` both pass.
+- [x] `uv run pytest -m "not llm_eval"` and `uv run ruff check .` both pass.
 
 ## Open Questions
 

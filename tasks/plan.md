@@ -932,22 +932,23 @@ resolution.agent() failure handling ──┘
 
 - [x] Task 14: `classify_intent` failure handling
 - [x] Task 15: `_analyze_email` failure handling
-- [ ] Task 16: `resolution.agent()` failure handling
+- [x] Task 16: `resolution.agent()` failure handling
 
 ### Checkpoint: Milestone 1.5 complete
-- [ ] A "check for conflicts" turn that finds nothing shows a real
+- [x] A "check for conflicts" turn that finds nothing shows a real
       acknowledgment, not a silent loop back to `greet`
-- [ ] A simulated Google API failure during `fetch_emails`/`check_calendar`
+- [x] A simulated Google API failure during `fetch_emails`/`check_calendar`
       aborts the whole turn (never reaches `detect_actions` with partial
       data) and shows a clear message
-- [ ] A simulated `classify_intent` failure prints a diagnostic line and
+- [x] A simulated `classify_intent` failure prints a diagnostic line and
       falls back to `greet` without crashing
-- [ ] A simulated `_analyze_email` failure for one email doesn't stop the
+- [x] A simulated `_analyze_email` failure for one email doesn't stop the
       rest of the batch from being classified normally
-- [ ] A simulated `resolution.agent()` failure after some tool calls
+- [x] A simulated `resolution.agent()` failure after some tool calls
       already succeeded produces an honest report of what was actually
       done, not a generic "nothing happened" message
-- [ ] `uv run pytest -m "not llm_eval"` and `uv run ruff check .` both pass
+- [x] `uv run pytest -m "not llm_eval"` and `uv run ruff check .` both pass
+      (126 passed; all mocked, no live API calls)
 - [ ] Review with human before starting Milestone 2's RAG work
 
 ## Task Details
@@ -1141,16 +1142,16 @@ like a normal end-of-turn summary — zero new graph nodes or edges needed
 for this fix.
 
 **Acceptance criteria:**
-- [ ] A failure after zero prior tool calls this turn produces a plain "I
+- [x] A failure after zero prior tool calls this turn produces a plain "I
       ran into an error, nothing was done" message
-- [ ] A failure after one or more successful tool calls this turn produces
+- [x] A failure after one or more successful tool calls this turn produces
       a message that accurately lists what was actually completed, reusing
       `_latest_proposals` rather than re-deriving that logic
-- [ ] The resulting message has no tool calls attached, so it flows to
+- [x] The resulting message has no tool calls attached, so it flows to
       `review` through the existing `tools_condition` routing unchanged
 
 **Verification:**
-- [ ] `tests/test_resolution.py` — a mocked LLM call raising after 0 and
+- [x] `tests/test_resolution.py` — a mocked LLM call raising after 0 and
       after 2+ prior successful tool-call rounds each produce the
       corresponding message shape, verified against `_latest_proposals`'s
       actual output rather than a hand-duplicated check
@@ -1163,6 +1164,17 @@ not a new one being built here)
 already accessible), `tests/test_resolution.py`
 
 **Estimated scope:** Medium
+
+**Implementation note:** `_latest_proposals` was already importable as-is
+(same cross-module underscore-import precedent `review.py` itself uses for
+`detection.py`'s `_find_calendar_overlaps`/`_find_back_to_back`), so
+`review.py` needed no export change. Scoped to `EventProposal`s only, not
+draft replies -- `_latest_proposals` never tracked `DraftResult` artifacts
+(review.py's collision-note use of it doesn't need to either), and adding
+that tracking wasn't in this task's files-likely-touched list. The honest
+report can therefore undercount a turn's real progress when a draft-only
+tool call preceded the failure; acceptable since it only ever under- not
+over-claims, and revisit if this matters in practice.
 
 ## Risks and Mitigations
 
