@@ -1170,7 +1170,7 @@ already accessible), `tests/test_resolution.py`
 |---|---|---|
 | 0 retries means a genuinely transient blip (rare, but possible) surfaces as a visible failure instead of being silently absorbed | Low | Accepted tradeoff — the conversational retry loop already covers it at zero extra engineering cost; revisit only if live use shows transient failures are frequent enough to be annoying |
 | `classify_intent`'s bare `print()` diverges from the state-based messaging pattern everywhere else | Low | Documented explicitly here rather than silently inconsistent; acceptable because this project has no non-CLI frontend today |
-| Silent `_analyze_email` skip could hide a real, important email if it happens to be the one that fails | Low-Medium | Accepted given precedent (Task 10 already silently skips malformed items in this function) and given the failure is a missed detection, not a hidden action; revisit if this becomes a recurring, not just theoretical, complaint |
+| `_analyze_email` failure hiding a real, important email if it happens to be the one that fails | Resolved | Originally accepted as a Low-Medium silent-skip risk (Task 10 precedent: malformed items already skip quietly); superseded before implementation once the same "confidently wrong from partial data" concern that motivates Task 13 was recognized here too. Task 15 now surfaces a `failed_emails` note via `review`/`no_action_items` instead of staying silent, so a missed email is visible to the human every turn rather than an accepted theoretical gap |
 
 ## Open Questions
 
