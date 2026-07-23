@@ -19,8 +19,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "markdown>=3.10.2",
     "pytest",
     "ruff",
+    "xhtml2pdf>=0.2.17",
 ]
 
 [tool.pytest.ini_options]
