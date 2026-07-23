@@ -442,7 +442,7 @@ retrieval engine:
   `answer_policy_question` node: retrieve, generate, done.
 
 **Success looks like:** a seeded `policy_question` email gets a drafted
-reply grounded in the correct policy document (or a plain statement that
+reply grounded in the correct policy section (or a plain statement that
 none applies, for the not-found variant); a direct chat policy question —
 including one that only an adjacent-pair-aware retrieval can resolve
 correctly — is answered with a citation without ever touching
@@ -478,15 +478,42 @@ beyond the tech stack" boundary.
   `answer_policy_question` (2-step) call into it rather than each
   reimplementing retrieval. Exposes `build_policy_index()` (ingestion) and
   `search_policies(query, k) -> str` (retrieval, wrapped as
-  `search_policies_tool = tool(search_policies)`).
-- `seed_data/policies/*.md` (new) — 8-15 short, single-topic, advisory-only
-  documents, including at least two pairs of genuinely adjacent topics
-  distinguishable only by a specific checkable detail. **Chunking: one file
-  = one chunk, no splitter** — each doc is authored short and single-topic,
-  so the file boundary is already the correct semantic boundary; no
-  fixed-size splitting, overlap, hierarchical chunking, or category
-  metadata (would blur the deliberately-overlapping pairs that hybrid
-  search + reranking exist specifically to disambiguate).
+  `search_policies_tool = tool(search_policies)`). Citations are
+  section-level (`"[source: Parental Leave > Notice/Approval Process]"`,
+  using the H1/H2 titles, not a filename — see below), not whole-document,
+  since a query can now match a specific H2 chunk rather than an entire
+  policy.
+- `seed_data/policies.md` (new) — **one file**, 15 H1 sections (one per
+  policy), each a short, single-topic, advisory-only policy, including at
+  least two pairs of genuinely adjacent topics distinguishable only by a
+  specific checkable detail; H1 titles for paired topics stay specific and
+  distinct (e.g. "Parental Leave" vs. "Medical Leave", not both "Leave
+  Policy"), since the H1 is the identity carried into every chunk beneath
+  it — and, with everything in one file, the *only* identity, since there's
+  no filename to fall back on. **Chunking technique: document-based
+  chunking + context enrichment.** *Document-based* — split on the file's
+  own headers, two levels (H1 policy title, H2 sub-facet), no H3. Each of
+  the 15 H1s has 3-5 H2 sections (e.g. Eligibility, Duration/Amount,
+  Notice/Approval Process, Exceptions), ~40-100 words each — short enough
+  that the disambiguating detail for an overlapping pair dominates its own
+  chunk rather than sitting diluted among filler. No fixed-size splitting
+  or overlap (headers are the semantic boundary) and no category metadata
+  beyond the header path itself. *Context enrichment* — before embedding,
+  each chunk is prefixed with its header path (`"{H1} > {H2}"`) —
+  load-bearing, not optional: a bare H2 body doesn't self-identify which
+  policy it belongs to, and that identity is exactly what disambiguating
+  an overlapping pair depends on. Chunk/citation identity (stable ids,
+  source names) is derived from the H1/H2 header path, not from a filename
+  — single-file, so filename can't distinguish policies the way it did in
+  the earlier one-file-per-policy design.
+- `scripts/render_policies_pdf.py` (new) — renders `seed_data/policies.md`
+  to `seed_data/policies.pdf` via `markdown` + `xhtml2pdf`, for human
+  reference (this is a portfolio project — a committed PDF renders
+  directly in GitHub's file viewer for recruiters/reviewers browsing the
+  repo, no clone/run required). The markdown file remains the sole source
+  of truth and the only thing `build_policy_index()` reads; the PDF is
+  committed alongside it, regenerated and recommitted in the same commit
+  whenever `policies.md` changes.
 - `state.py` gains a fifth `ActionNeeded` variant, `PolicyQuestionEmail`
   (`kind`, `description`, `email` — no `events`, since it isn't about
   calendar state). Detected by extending `_analyze_email`'s existing
@@ -547,10 +574,12 @@ call), split by *when* the failure happens rather than by provider:
 
 - `tests/test_rag.py` (new) — mocks the Chroma client, `OpenAIEmbeddings`,
   and the reranker; no live network calls or model downloads in the
-  automated suite. Covers ingestion (one chunk per file, stable ids,
-  filename metadata), retrieval (hybrid fusion, rerank narrowing, citation
-  formatting, the no-match sentinel), and both failure-handling paths
-  (index-build raises, query-time degrades).
+  automated suite. Covers ingestion (one chunk per H2 section,
+  header-path-prefixed embedding text, H1/H2-derived stable ids and
+  metadata — no filename involved, since the corpus is one file), retrieval
+  (hybrid fusion, rerank narrowing, section-level citation formatting, the
+  no-match sentinel), and both failure-handling paths (index-build raises,
+  query-time degrades).
 - `evals/policy_retrieval_examples.py` + `tests/test_policy_retrieval_eval.py`
   (new, marked `llm_eval`, excluded from CI) — a golden query → expected
   source dataset weighted toward the overlapping-topic pairs, reporting
@@ -568,7 +597,8 @@ call), split by *when* the failure happens rather than by provider:
 ## Success Criteria
 
 - [ ] Seeded `policy_question` email (found variant): agent calls
-      `search_policies` and drafts a reply citing the correct policy.
+      `search_policies` and drafts a reply citing the correct policy
+      section.
 - [ ] Seeded `policy_question` email (not-found variant): agent states
       plainly that no policy applies rather than fabricating an answer.
 - [ ] A scheduling conflict with no applicable policy is resolved on
@@ -589,9 +619,10 @@ call), split by *when* the failure happens rather than by provider:
 
 ## Open Questions
 
-- Exact wording/topics of the 8-15 policy documents and which pairs are
-  made deliberately overlapping — left to Task 18 implementation time, not
-  spec-blocking.
+- Exact prose content of the 15 policy sections — topics, pairing, and
+  which H2 holds each pair's disambiguating detail are decided (see Task
+  18 in `tasks/plan.md`); writing the actual `seed_data/policies.md` text
+  is left to Task 18 implementation time, not spec-blocking.
 - Chroma Cloud pricing tier / free-tier limits for this project's scale —
   confirm during Task 17 setup.
 - Whether Task 26's before/after comparison is compelling enough for the

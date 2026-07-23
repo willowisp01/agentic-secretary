@@ -94,15 +94,16 @@ plan.md's Overview).
 
 ## Phase C: RAG Foundation
 - [ ] Task 17: Config + dependencies (OpenAI, Chroma Cloud, BGE reranker)
-- [ ] Task 18: Synthetic policy corpus (sized for deliberate topic overlap)
+- [x] Task 18: Synthetic policy corpus (sized for deliberate topic overlap)
       + two new `policy_question` email scenarios (found / not-found)
 
 **Checkpoint:** deps installed, Chroma Cloud reachable, corpus + seed
 emails in place; review with human.
 
 ## Phase D: Retrieval Walking Skeleton
-- [ ] Task 19: Ingestion module (`rag.py` — one file = one chunk, upsert
-      into a Chroma Cloud collection configured for hybrid search)
+- [ ] Task 19: Ingestion module (`rag.py` — header-based H1/H2 chunks,
+      header path prepended before embedding, upsert into a Chroma Cloud
+      collection configured for hybrid search)
 - [ ] Task 20: `search_policies` — hybrid retrieval (dense + BM25, `Rrf`)
       + BGE-Reranker-v2-m3 rerank
 

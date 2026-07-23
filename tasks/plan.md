@@ -1311,17 +1311,33 @@ Policy corpus + policy_question email       │                   │
   policies) so the retrieval eval (Task 26) can show a measured precision
   difference between cosine-only and hybrid+rerank, demonstrating the
   technique rather than just describing it.
-- **Chunking: one file = one chunk, no splitter** — each policy doc is
-  authored short and single-topic, so the file boundary already is the
-  correct semantic boundary. No fixed-size splitting (would cut a policy
-  statement in half or fragment an intentionally-adjacent pair into noise
-  the retrieval eval didn't intend to test), no overlap parameter (nothing
-  to lose context across, since there's no arbitrary cut point), no
-  hierarchical/parent-child chunking (no larger "parent" exists beyond the
-  already-short document itself) and no category/section metadata (doesn't
-  help disambiguate the deliberately-overlapping pairs, since both members
-  of a pair would share the same category — that disambiguation is hybrid
-  search + reranking's job specifically).
+- **Corpus is one file, `seed_data/policies.md`, with 15 H1 sections** —
+  not one-file-per-policy. Chosen over the earlier per-file design because
+  it matches the general finding that header-based chunking makes file
+  boundaries irrelevant to the resulting chunks, so there's no
+  chunking-correctness reason to keep 15 files; the tradeoff is that H1/H2
+  headers become the *only* identity a chunk carries (see below — no
+  filename to fall back on).
+- **Chunking technique: document-based chunking + context enrichment.**
+  *Document-based* — split on the file's own headers, two levels (H1
+  policy title, H2 sub-facet), no H3; each of the 15 H1s has 3-5 H2
+  sections (e.g. Eligibility, Duration/Amount, Notice/Approval Process,
+  Exceptions), ~40-100 words each. Headers are the semantic boundary, so
+  no fixed-size splitting and no overlap parameter. H1 titles for the
+  deliberately-overlapping pairs stay specific and distinct (e.g.
+  "Parental Leave" vs. "Medical Leave"), since the H1 is the identity
+  every chunk beneath it carries. *Context enrichment* — before embedding,
+  each chunk is prefixed with its header path (`"{H1} > {H2}"`) — this is
+  what makes sub-chunking safe here: without it, a bare H2 body (e.g.
+  "must have worked 6+ months full-time") doesn't self-identify which
+  policy it belongs to, undermining the exact disambiguation hybrid search
+  + reranking exist to do. Citations move from whole-document to
+  section-level (`"[source: Parental Leave > Notice/Approval Process]"`,
+  the H1/H2 titles themselves) as a result — more precise, and a direct
+  consequence of chunking below the document boundary. Stable ingestion
+  ids are likewise derived from the H1/H2 header path (e.g.
+  `parental-leave#notice-approval-process`, slugified), not from a
+  filename.
 - **Two RAG architectures, one retrieval engine** — `rag.py` owns
   chunking, hybrid retrieval, and reranking as shared logic; both
   `resolution.agent()` (agentic) and `answer_policy_question` (2-step) call
@@ -1366,7 +1382,7 @@ Policy corpus + policy_question email       │                   │
 ### Phase C: RAG Foundation
 
 - [ ] Task 17: Config + dependencies
-- [ ] Task 18: Synthetic policy corpus + `policy_question` email scenarios
+- [x] Task 18: Synthetic policy corpus + `policy_question` email scenarios
 
 ### Checkpoint: Foundation
 - [ ] `uv sync` succeeds with all new dependencies; `uv run ruff check .`
@@ -1468,20 +1484,28 @@ Policy corpus + policy_question email       │                   │
 
 ### Task 18: Synthetic policy corpus + `policy_question` email scenarios
 
-**Description:** Author `seed_data/policies/*.md` (8-15 short,
-single-topic, advisory-only documents — explicitly no time/day-of-week
-scheduling constraints), including at least two pairs of genuinely
-adjacent topics distinguishable only by a specific checkable detail. Add a
-new `policy_question` relation kind to `relations.yaml` (fields: `email`
-only, zero events) and two new emails to `emails.yaml`: one asking
-something the corpus actually covers, one asking something entirely
-outside the corpus.
+**Description:** Author `seed_data/policies.md` — **one file**, 15 H1
+sections (short, single-topic, advisory-only each — explicitly no
+time/day-of-week scheduling constraints), including at least two pairs of
+genuinely adjacent topics distinguishable only by a specific checkable
+detail. Each H1 (policy title) has 3-5 H2 sub-facets (e.g. Eligibility,
+Duration/Amount, Notice/Approval Process, Exceptions), ~40-100 words per
+H2; H1 titles for the overlapping pairs stay specific and distinct rather
+than sharing a generic title, since — with everything in one file — H1 is
+the only thing that identifies which policy a chunk belongs to. Add a new
+`policy_question` relation kind to `relations.yaml` (fields: `email` only,
+zero events) and two new emails to `emails.yaml`: one asking something the
+corpus actually covers, one asking something entirely outside the corpus.
 
 **Acceptance criteria:**
-- [ ] At least two adjacent/overlapping document pairs exist, each
+- [ ] Exactly 15 H1 sections in `seed_data/policies.md`
+- [ ] At least two adjacent/overlapping H1 pairs exist, each
       distinguishable only by a specific detail, not by an obviously
       different subject
-- [ ] At least a few documents remain clearly distinct
+- [ ] At least a few H1 sections remain clearly distinct
+- [ ] Every H1 has 3-5 H2 sections, each H2 body ~40-100 words
+- [ ] The specific checkable detail distinguishing each overlapping pair
+      sits within a single H2 section, not spread across several
 - [ ] One `policy_question` email is answerable from the corpus; one is not
 - [ ] `relations.yaml`'s `policy_question` kind is validated by the
       existing loader (`seed_data.py`) alongside the four Milestone 1 kinds
@@ -1494,7 +1518,7 @@ outside the corpus.
 
 **Dependencies:** None (parallel with Task 17)
 
-**Files likely touched:** `seed_data/policies/*.md`, `seed_data/emails.yaml`,
+**Files likely touched:** `seed_data/policies.md`, `seed_data/emails.yaml`,
 `seed_data/relations.yaml`, `tests/test_seed_data.py`
 
 **Estimated scope:** Medium
@@ -1506,23 +1530,34 @@ outside the corpus.
 **Description:** New `src/agentic_secretary/rag.py`. `build_policy_index()`
 lazily gets-or-creates a Chroma Cloud collection (`chromadb.CloudClient()`)
 configured with a dense embedding function (`OpenAIEmbeddings`) and a
-sparse `Bm25EmbeddingFunction`, then loads each `seed_data/policies/*.md`
-file as exactly one chunk (no splitter) and upserts by a stable id derived
-from filename (idempotent — re-running doesn't duplicate). No
-Chroma/OpenAI-touching object constructed at import time, matching the
-lazy-construction convention already used for `ChatAnthropic`.
+sparse `Bm25EmbeddingFunction`, then loads the single
+`seed_data/policies.md` file, splits it on H1/H2 headers
+(`MarkdownHeaderTextSplitter` or equivalent — no H3, no fixed-size
+splitting), and for each resulting H2 chunk prepends its header path
+(`"{H1} > {H2}"`) to the chunk text before embedding. Upserts by a stable
+id derived from the slugified H1 + H2 header path (e.g.
+`parental-leave#notice-approval-process`) — not a filename, since the
+corpus is one file and H1/H2 are the only per-policy identity available —
+idempotent — re-running doesn't duplicate. No Chroma/OpenAI-touching
+object constructed at import time, matching the lazy-construction
+convention already used for `ChatAnthropic`.
 
 **Acceptance criteria:**
 - [ ] `build_policy_index()` returns a Chroma collection populated from the
-      real corpus, one chunk per file, configured for both dense and
+      real corpus, one chunk per H2 section, configured for both dense and
       sparse indexing
+- [ ] Each embedded chunk's text is prefixed with its `"{H1} > {H2}"`
+      header path
 - [ ] Re-running ingestion doesn't create duplicate entries
-- [ ] Each chunk retains its source filename as metadata
+- [ ] Each chunk's stable id and metadata are derived from its H1/H2
+      header path (no filename involved)
 
 **Verification:**
 - [ ] `tests/test_rag.py` mocks the Chroma client and `OpenAIEmbeddings`;
-      asserts one chunk per file, metadata carries the filename, upsert
-      uses stable ids, no real network call happens
+      asserts 15 H1s × (3-5 H2s each) chunks total, the embedded text
+      carries the header-path prefix, metadata carries H1/H2 (no
+      filename), upsert uses H1/H2-derived stable ids, no real network
+      call happens
 
 **Dependencies:** Task 17, Task 18
 
@@ -1539,16 +1574,17 @@ lazy-construction convention already used for `ChatAnthropic`.
 builds/caches the collection, runs Chroma Cloud's hybrid search (dense
 `Knn` + sparse `Knn`, fused via `Rrf`) to pull ~10-20 candidates, reranks
 via a lazily-loaded `FlagReranker(settings.reranker_model_name)` down to the
-final top-k, formats results with source citations
-(`"[source: sick-leave.md] ..."`), or returns a distinct `"No relevant
-policy found."` string below a relevance threshold. Wrapped as
-`search_policies_tool = tool(search_policies)`.
+final top-k, formats results with section-level source citations
+(`"[source: Sick Leave > Eligibility] ..."`, the H1/H2 titles — no
+filename, since the corpus is one file), or returns a distinct
+`"No relevant policy found."` string below a relevance threshold. Wrapped
+as `search_policies_tool = tool(search_policies)`.
 
 **Acceptance criteria:**
 - [ ] Hybrid retrieval pulls a wider candidate set than `k`, combining
       dense + sparse via `Rrf`
 - [ ] BGE reranking narrows/reorders to the final top-k
-- [ ] Results include source document names
+- [ ] Results include the H1 policy title and H2 section name
 - [ ] Below-threshold case returns the sentinel string, never an exception
       or empty string
 - [ ] `search_policies_tool` exposes `.name`/`.description` precise enough
@@ -1728,7 +1764,7 @@ the agent's turn or the 2-step answer path continues.
 ### Task 26: Retrieval evaluation — hybrid+rerank vs. cosine-only
 
 **Description:** A golden dataset (`evals/policy_retrieval_examples.py`)
-of query → expected source document, weighted toward the
+of query → expected source (document + H2 section), weighted toward the
 overlapping-topic pairs. `tests/test_policy_retrieval_eval.py` (marked
 `llm_eval`, excluded from CI) runs each query through both a cosine-only
 baseline (dense `Knn` alone) and the real hybrid+rerank pipeline, reporting
@@ -1835,8 +1871,9 @@ store, the explicit out-of-scope call on time-based policies, and the Task
 
 ## Open Questions
 
-- Exact wording/topics of the 8-15 policy documents and which pairs are
-  made deliberately overlapping (Task 18) — left to implementation time.
+- Exact prose content of `seed_data/policies.md`'s 15 H1 sections — topics
+  and pairing are decided (Task 18 above); writing the actual text is
+  left to implementation time.
 - Chroma Cloud pricing tier / free-tier limits for this project's scale —
   confirm during Task 17 setup.
 - Whether Task 26's before/after comparison is compelling enough for the

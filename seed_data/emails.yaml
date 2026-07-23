@@ -35,3 +35,24 @@ emails:
       Here's what happened on the team this week: 3 PRs merged,
       1 incident resolved, next sprint planning is Monday.
     sent_relative: "-1d"
+
+  - id: email_policy_question_found
+    from: "sam.rivera@example.com"
+    to: "you@example.com"
+    subject: "Question about parental leave eligibility"
+    body: |
+      Hi — my partner and I are expecting our first child in a few
+      months and I'd like to plan ahead. As the primary caregiver, how
+      many weeks of paid leave am I eligible for, and is there a
+      minimum amount of time I need to have worked here first?
+    sent_relative: "-4h"
+
+  - id: email_policy_question_not_found
+    from: "morgan.taylor@example.com"
+    to: "you@example.com"
+    subject: "Pet insurance reimbursement?"
+    body: |
+      Quick one — does the company offer any reimbursement or stipend
+      toward pet insurance? Trying to decide whether to renew my plan
+      this month.
+    sent_relative: "-1d"

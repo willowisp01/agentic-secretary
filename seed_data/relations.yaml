@@ -16,3 +16,9 @@ relations:
   - kind: mentions
     email: email_casual_mention
     event: evt_client_call
+
+  - kind: policy_question
+    email: email_policy_question_found
+
+  - kind: policy_question
+    email: email_policy_question_not_found

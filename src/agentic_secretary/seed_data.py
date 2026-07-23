@@ -9,6 +9,7 @@ RELATION_ARITY = {
     "email_conflict": {"requires_email": True, "min_events": 1},
     "reschedule": {"requires_email": True, "requires_event": True},
     "mentions": {"requires_email": True, "requires_event": True},
+    "policy_question": {"requires_email": True},
 }
 
 

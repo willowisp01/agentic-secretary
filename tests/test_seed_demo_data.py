@@ -108,8 +108,8 @@ def test_seed_inserts_all_fixture_emails_and_events_via_direct_api_calls():
     seed(gmail_service, calendar_service, now=NOW)
 
     messages = gmail_service.users.return_value.messages.return_value
-    assert messages.insert.call_count == 4
+    assert messages.insert.call_count == len(_FIXTURE_EMAILS)
     messages.send.assert_not_called()
 
     events = calendar_service.events.return_value
-    assert events.insert.call_count == 4
+    assert events.insert.call_count == len(_FIXTURE_EVENTS)
