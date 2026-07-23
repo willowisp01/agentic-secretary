@@ -93,7 +93,7 @@ policies (would need a deterministic constraint engine, not RAG — see
 plan.md's Overview).
 
 ## Phase C: RAG Foundation
-- [ ] Task 17: Config + dependencies (OpenAI, Chroma Cloud, BGE reranker)
+- [x] Task 17: Config + dependencies (OpenAI, Chroma Cloud, BGE reranker)
 - [x] Task 18: Synthetic policy corpus (sized for deliberate topic overlap)
       + two new `policy_question` email scenarios (found / not-found)
 

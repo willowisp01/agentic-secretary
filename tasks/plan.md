@@ -1381,7 +1381,7 @@ Policy corpus + policy_question email       │                   │
 
 ### Phase C: RAG Foundation
 
-- [ ] Task 17: Config + dependencies
+- [x] Task 17: Config + dependencies
 - [x] Task 18: Synthetic policy corpus + `policy_question` email scenarios
 
 ### Checkpoint: Foundation

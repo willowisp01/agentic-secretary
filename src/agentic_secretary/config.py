@@ -14,6 +14,9 @@ DEFAULT_MODEL_NAME = "claude-haiku-4-5"
 # then misstated it in its own prose summary two sentences later.
 DEFAULT_AGENT_MODEL_NAME = "claude-sonnet-4-5"
 
+DEFAULT_EMBEDDING_MODEL_NAME = "text-embedding-3-small"
+DEFAULT_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+
 # The seeded burner account's fictional persona is anchored to this
 # timezone. Bare (offset-less) clock times -- "+1d 09:00" in a seed fixture,
 # "9:15am" mentioned in an email body -- are resolved against this rather
@@ -34,6 +37,12 @@ class Settings:
     google_cleanup_token_path: str
     model_name: str
     agent_model_name: str
+    openai_api_key: str | None
+    embedding_model_name: str
+    chroma_api_key: str | None
+    chroma_tenant: str | None
+    chroma_database: str | None
+    reranker_model_name: str
 
 
 def _load_settings() -> Settings:
@@ -63,6 +72,16 @@ def _load_settings() -> Settings:
         ),
         model_name=os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME),
         agent_model_name=os.getenv("AGENT_MODEL_NAME", DEFAULT_AGENT_MODEL_NAME),
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        embedding_model_name=os.getenv(
+            "EMBEDDING_MODEL_NAME", DEFAULT_EMBEDDING_MODEL_NAME
+        ),
+        chroma_api_key=os.getenv("CHROMA_API_KEY"),
+        chroma_tenant=os.getenv("CHROMA_TENANT"),
+        chroma_database=os.getenv("CHROMA_DATABASE"),
+        reranker_model_name=os.getenv(
+            "RERANKER_MODEL_NAME", DEFAULT_RERANKER_MODEL_NAME
+        ),
     )
 
 
